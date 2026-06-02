@@ -5,6 +5,8 @@ trace UI that renders a run **purely from the `TraceEvent` stream**. The differe
 pre-action **governance gate**: agents propose actions; the gate ALLOWS or BLOCKS each one against an
 explicit policy, and every decision is auditable.
 
+**▶ Live demo:** **https://governed-agents.vercel.app** — run the allowed task and the blocked task and watch three agents coordinate while the gate allows one action and blocks the other, with a logged rationale. Zero setup; agents call a current Claude model server-side.
+
 ## Contracts (frozen)
 
 - `lib/governance.ts` — C1: `AgentRole`, `Provenance`, `ProposedAction`, `PolicyDecision`,
