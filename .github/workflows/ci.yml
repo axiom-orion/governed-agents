@@ -1,0 +1,42 @@
+name: CI
+
+# Quality gates for pull requests and the default branch. Deployment is handled by
+# Vercel's native Git integration (connect the repo in the Vercel dashboard) — this
+# workflow only gates correctness, it does not deploy. Protect the default branch with
+# a required status check on this workflow so production deploys are effectively gated.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  checks:
+    name: typecheck · model · trace · smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck (strict, no `any`)
+        run: npm run typecheck
+
+      - name: Verify configured model ids are current
+        run: npm run check:model
+
+      - name: Trace projection contract (P4 UI)
+        run: npx tsx scripts/verify-trace.ts
+
+      - name: Loop smoke test — allow + block must hit expected gate outcomes
+        run: npm run demo
+        env:
+          # Force the deterministic offline stub: no API key in CI, and the run must
+          # not depend on one. Asserts allowed→allow and blocked→block.
+          AGENTS_OFFLINE: "1"

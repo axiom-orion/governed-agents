@@ -8,9 +8,13 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "check:model": "tsx scripts/check-model.ts"
+    "check:model": "tsx scripts/check-model.ts",
+    "demo": "tsx scripts/run.ts",
+    "demo:allow": "tsx scripts/run.ts allowed",
+    "demo:block": "tsx scripts/run.ts blocked"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.100.1",
     "@xyflow/react": "^12.3.6",
     "next": "^15.1.6",
     "react": "^19.0.0",

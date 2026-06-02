@@ -1,0 +1,25 @@
+{
+  "//": "Scoped typecheck for the P4 trace UI in isolation from the in-progress P3 loop files. Use: npx tsc -p tsconfig.p4.json. Inherits strict options + @/* paths from tsconfig.json.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false
+  },
+  "include": [
+    "next-env.d.ts",
+    "lib/governance.ts",
+    "lib/trace-events.ts",
+    "lib/ndjson.ts",
+    "lib/trace-model.ts",
+    "lib/useTraceStream.ts",
+    "mocks/trace.sample.ts",
+    "components/TraceCanvas.tsx",
+    "components/TraceViewer.tsx",
+    "components/panels/ProvenancePanel.tsx",
+    "components/panels/GateDecision.tsx",
+    "app/layout.tsx",
+    "app/trace/page.tsx",
+    "scripts/verify-trace.ts"
+  ],
+  "exclude": ["node_modules"]
+}
