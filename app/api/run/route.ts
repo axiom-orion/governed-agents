@@ -8,9 +8,10 @@ import { SEED_TASKS, getTask } from "@/lib/tasks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// Raise the function timeout for the multi-step model loop. Verify against your
-// Vercel plan ceiling (Hobby 60s, Pro 300s, Enterprise 900s) before deploying.
-export const maxDuration = 300;
+// Raise the function timeout for the multi-step model loop. 60s is safe on every
+// Vercel plan (Hobby caps at 60; Pro 300; Enterprise 900) and the loop finishes in
+// seconds — bump to 300 on Pro+ if you want more headroom.
+export const maxDuration = 60;
 
 interface RunRequest {
   readonly task?: string;
