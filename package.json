@@ -1,0 +1,29 @@
+{
+  "name": "governed-agents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Governed multi-agent flow — Researcher → Reasoner → governance gate → execute/halt — with a trace UI rendered purely from the TraceEvent stream.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "check:model": "tsx scripts/check-model.ts"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.3.6",
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.6",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

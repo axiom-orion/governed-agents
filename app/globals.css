@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* React Flow renders into a measured container; give it a clean neutral base
+   that matches the enterprise palette rather than the library defaults. */
+.react-flow__attribution {
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 10px;
+}
