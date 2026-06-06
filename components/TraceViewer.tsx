@@ -7,7 +7,7 @@
 // (chunked + mid-line split, optionally with malformed lines injected to show they
 // are skipped) — useful offline and for demoing resilience.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTraceStream } from "@/lib/useTraceStream";
 import type { TraceStreamSource } from "@/lib/useTraceStream";
 import {
@@ -27,6 +27,10 @@ import type { RunStatus, TraceModel } from "@/lib/trace-model";
 import { TraceCanvas } from "@/components/TraceCanvas";
 import { ProvenancePanel } from "@/components/panels/ProvenancePanel";
 import { GateDecision } from "@/components/panels/GateDecision";
+import { RawTraceDrawer } from "@/components/RawTraceDrawer";
+
+const REPO_URL = "https://github.com/axiom-orion/governed-agents";
+const ARCH_DOC_URL = `${REPO_URL}/blob/master/docs/ARCHITECTURE.md`;
 
 type DataMode = "live" | "sample";
 
@@ -66,6 +70,15 @@ export function TraceViewer() {
   const [injectNoise, setInjectNoise] = useState(true);
   const [replayNonce, setReplayNonce] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
+
+  // Pre-warm the serverless function on mount with a cheap GET so the reviewer's
+  // first Live click hits a warm lambda. Fire-and-forget; failures are harmless.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/run", { method: "GET", signal: controller.signal }).catch(() => {});
+    return () => controller.abort();
+  }, []);
 
   const source = useMemo<TraceStreamSource | null>(() => {
     if (!started) return null;
@@ -91,7 +104,8 @@ export function TraceViewer() {
     };
   }, [started, mode, runId, injectNoise, replayNonce]);
 
-  const { model, malformedCount, connection, streamError } = useTraceStream(source);
+  const { model, events, malformedCount, connection, warmupAttempt, streamError } =
+    useTraceStream(source);
 
   // Prefer the user's selection when it still exists in the current run;
   // otherwise fall back to the most informative node (the gate).
@@ -126,6 +140,27 @@ export function TraceViewer() {
             <p className="mt-0.5 max-w-2xl text-sm text-slate-500">
               Every action an agent proposes is checked against an explicit policy before it runs.
               This view is rendered entirely from the run&rsquo;s trace event stream.
+            </p>
+            <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+              <span className="font-mono">
+                Next.js · server-side agent loop · streaming NDJSON trace · policy gate before execution
+              </span>
+              <a
+                href={ARCH_DOC_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-blue-600 underline-offset-2 hover:underline"
+              >
+                Architecture &amp; schema →
+              </a>
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-blue-600 underline-offset-2 hover:underline"
+              >
+                Repo →
+              </a>
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -182,6 +217,15 @@ export function TraceViewer() {
             >
               Replay
             </button>
+            <button
+              type="button"
+              onClick={() => setShowRaw(true)}
+              disabled={events.length === 0}
+              title="Inspect the raw streamed TraceEvents (NDJSON)"
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              View raw trace{events.length > 0 ? ` (${events.length})` : ""}
+            </button>
           </div>
         </div>
 
@@ -195,10 +239,25 @@ export function TraceViewer() {
           {connection === "connecting" ? (
             <span className="text-slate-500">connecting…</span>
           ) : null}
+          {connection === "warming" ? (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800"
+              role="status"
+            >
+              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+              Warming up the agent…{warmupAttempt > 1 ? ` (retry ${warmupAttempt})` : ""}
+            </span>
+          ) : null}
           {connection === "streaming" ? (
             <span className="inline-flex items-center gap-1.5 text-slate-500">
               <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
               streaming
+            </span>
+          ) : null}
+          {mode === "live" && !started ? (
+            <span className="text-slate-400">
+              Live calls a Claude model server-side and may cold-start on the first run; Sample is
+              instant.
             </span>
           ) : null}
           {model.task ? (
@@ -251,6 +310,8 @@ export function TraceViewer() {
           <ProvenancePanel sources={sources} contextLabel={contextLabel} />
         </aside>
       </main>
+
+      <RawTraceDrawer events={events} open={showRaw} onClose={() => setShowRaw(false)} />
     </div>
   );
 }
