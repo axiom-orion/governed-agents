@@ -48,17 +48,65 @@ type DataMode = "live" | "sample";
 
 const keyOf = (mode: DataMode, runId: SampleRunId): string => `${mode}:${runId}`;
 
-// `id` selects the sample run; `taskId` is the seed task the live route understands.
-const RUN_OPTIONS: ReadonlyArray<{ id: SampleRunId; taskId: string; label: string }> = [
-  { id: "allow", taskId: "allowed", label: "Run allowed task" },
-  { id: "block", taskId: "blocked", label: "Run blocked task" },
+interface Scenario {
+  readonly id: SampleRunId;
+  readonly label: string;
+  /** Seed task the live route understands; absent ⇒ recorded-only (Sample). */
+  readonly liveTaskId?: string;
+  readonly outcome: Decision;
+  readonly tag: string;
+}
+
+// The scenario picker — a spread of governance behaviors so the system reads as a
+// framework, not a one-trick demo. The first two have real Live backing (seed
+// tasks); the rest are recorded demonstrations of policy types the loop can't
+// produce deterministically offline (PII content, the third decision state).
+const SCENARIOS: readonly Scenario[] = [
+  {
+    id: "allow",
+    label: "Allowed — well-sourced internal record",
+    liveTaskId: "allowed",
+    outcome: "allow",
+    tag: "confidence ok",
+  },
+  {
+    id: "block",
+    label: "Blocked — unverified external send",
+    liveTaskId: "blocked",
+    outcome: "block",
+    tag: "confidence threshold",
+  },
+  { id: "pii", label: "Blocked — PII in an external email", outcome: "block", tag: "PII leak" },
+  {
+    id: "approval",
+    label: "Needs approval — irreversible delete",
+    outcome: "needs_approval",
+    tag: "human approval",
+  },
+  {
+    id: "approved",
+    label: "Allowed — delete with approval attached",
+    outcome: "allow",
+    tag: "approval cleared",
+  },
 ];
+
+function scenarioById(id: SampleRunId): Scenario {
+  return SCENARIOS.find((s) => s.id === id) ?? SCENARIOS[0]!;
+}
+
+const OUTCOME_BADGE: Readonly<Record<Decision, { label: string; className: string }>> = {
+  allow: { label: "✓ allow", className: "bg-emerald-100 text-emerald-700" },
+  block: { label: "✕ block", className: "bg-red-100 text-red-700" },
+  needs_approval: { label: "⏸ review", className: "bg-amber-100 text-amber-800" },
+};
 
 const STATUS_STYLES: Readonly<Record<RunStatus, { label: string; className: string }>> = {
   idle: { label: "Idle", className: "bg-slate-100 text-slate-600" },
   running: { label: "Running", className: "bg-blue-100 text-blue-700" },
   completed: { label: "Completed", className: "bg-emerald-100 text-emerald-700" },
   halted: { label: "Halted", className: "bg-red-100 text-red-700" },
+  awaiting: { label: "Awaiting approval", className: "bg-amber-100 text-amber-800" },
   error: { label: "Error", className: "bg-red-100 text-red-700" },
 };
 
@@ -74,6 +122,7 @@ function selectedContextLabel(model: TraceModel, id: string | null): string | un
   if (!node) return undefined;
   if (node.kind === "step") return `${ROLE_LABEL[node.role] ?? node.role} · ${node.stepId}`;
   if (node.kind === "gate") return `Gate · ${node.stepId}`;
+  if (node.kind === "approval") return `Approval · ${node.stepId}`;
   return `Halt · ${node.stepId}`;
 }
 
@@ -113,8 +162,8 @@ export function TraceViewer() {
     if (!started) return null;
     // `replayNonce` participates so "Replay" rebuilds a fresh single-use stream.
     void replayNonce;
-    if (mode === "live") {
-      const option = RUN_OPTIONS.find((o) => o.id === runId);
+    const scenario = SCENARIOS.find((s) => s.id === runId);
+    if (mode === "live" && scenario?.liveTaskId) {
       return {
         kind: "url",
         url: "/api/run",
@@ -123,7 +172,7 @@ export function TraceViewer() {
           headers: { "content-type": "application/json" },
           // The edited policy flows to the real backend, so a Live re-run flips too.
           body: JSON.stringify({
-            taskId: option?.taskId ?? "allowed",
+            taskId: scenario.liveTaskId,
             policy: { externalSendThreshold: appliedThreshold },
           }),
         },
@@ -167,6 +216,9 @@ export function TraceViewer() {
   );
 
   const status = STATUS_STYLES[model.status];
+  const selectedScenario = scenarioById(runId);
+  const liveAvailable = selectedScenario.liveTaskId !== undefined;
+  const selectedBadge = OUTCOME_BADGE[selectedScenario.outcome];
 
   // The current run's gate decision + the action it gated (for the Policies panel).
   const currentDecision = useMemo<Decision | undefined>(() => {
@@ -212,7 +264,14 @@ export function TraceViewer() {
     setReplayNonce((n) => n + 1);
   };
 
-  const runTask = (id: SampleRunId): void => {
+  // Pick a scenario without running it; recorded-only scenarios force Sample mode.
+  const selectScenario = (id: SampleRunId): void => {
+    setRunId(id);
+    if (scenarioById(id).liveTaskId === undefined) setMode("sample");
+  };
+
+  // Run the selected scenario in the current mode.
+  const runScenario = (id: SampleRunId): void => {
     startRun(mode, id, appliedThreshold); // keep the active policy
     setGuided(false); // manual runs drop into the raw tool
   };
@@ -284,16 +343,27 @@ export function TraceViewer() {
             >
               {(["live", "sample"] as const).map((m) => {
                 const active = m === mode;
+                const disabled = m === "live" && !liveAvailable;
                 return (
                   <button
                     key={m}
                     type="button"
                     onClick={() => setMode(m)}
                     aria-pressed={active}
-                    title={m === "live" ? "Stream from POST /api/run" : "Replay a recorded sample run"}
+                    disabled={disabled}
+                    title={
+                      disabled
+                        ? "This scenario is a recorded demonstration — Sample only"
+                        : m === "live"
+                          ? "Stream from POST /api/run"
+                          : "Replay a recorded sample run"
+                    }
                     className={
                       "px-3 py-1.5 text-sm font-medium transition-colors " +
-                      (active ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50")
+                      (active
+                        ? "bg-slate-900 text-white"
+                        : "bg-white text-slate-600 hover:bg-slate-50") +
+                      (disabled ? " cursor-not-allowed opacity-40" : "")
                     }
                   >
                     {m === "live" ? "Live" : "Sample"}
@@ -301,27 +371,34 @@ export function TraceViewer() {
                 );
               })}
             </div>
-            <div className="inline-flex overflow-hidden rounded-md border border-slate-300">
-              {RUN_OPTIONS.map((option) => {
-                const active = started && option.id === runId;
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    onClick={() => runTask(option.id)}
-                    aria-pressed={active}
-                    className={
-                      "px-3 py-1.5 text-sm font-medium transition-colors " +
-                      (active
-                        ? "bg-slate-900 text-white"
-                        : "bg-white text-slate-600 hover:bg-slate-50")
-                    }
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
+            <label htmlFor="scenario-picker" className="sr-only">
+              Scenario
+            </label>
+            <select
+              id="scenario-picker"
+              value={runId}
+              onChange={(e) => selectScenario(e.target.value as SampleRunId)}
+              className="max-w-[16rem] rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-700"
+            >
+              {SCENARIOS.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+            <span
+              className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + selectedBadge.className}
+              title={`policy type: ${selectedScenario.tag}`}
+            >
+              {selectedBadge.label}
+            </span>
+            <button
+              type="button"
+              onClick={() => runScenario(runId)}
+              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
+            >
+              <span aria-hidden="true">▶</span> Run
+            </button>
             <button
               type="button"
               onClick={() => setReplayNonce((n) => n + 1)}
@@ -372,6 +449,9 @@ export function TraceViewer() {
               Live calls a Claude model server-side and may cold-start on the first run; Sample is
               instant.
             </span>
+          ) : null}
+          {!liveAvailable ? (
+            <span className="text-slate-400">Recorded scenario — Sample only.</span>
           ) : null}
           {model.task ? (
             <span className="text-slate-500">

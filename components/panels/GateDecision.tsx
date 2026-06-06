@@ -17,8 +17,13 @@ export function GateDecision({ gate }: { gate?: GateNodeData }) {
     );
   }
 
-  const allowed = gate.decision.decision === "allow";
-  const { violations, evaluatedAt } = gate.decision;
+  const { decision, violations, evaluatedAt } = gate.decision;
+  const tone =
+    decision === "allow"
+      ? { box: "border-emerald-300 bg-emerald-50 text-emerald-800", glyph: "✓", label: "Allowed" }
+      : decision === "needs_approval"
+        ? { box: "border-amber-300 bg-amber-50 text-amber-800", glyph: "⏸", label: "Needs approval" }
+        : { box: "border-red-300 bg-red-50 text-red-800", glyph: "✕", label: "Blocked" };
 
   return (
     <section aria-label="Gate decision" className="flex flex-col">
@@ -27,41 +32,43 @@ export function GateDecision({ gate }: { gate?: GateNodeData }) {
         <span className="font-mono text-xs text-slate-400">{evaluatedAt}</span>
       </header>
 
-      <div
-        className={[
-          "flex items-center gap-2 rounded-md border px-3 py-2",
-          allowed
-            ? "border-emerald-300 bg-emerald-50 text-emerald-800"
-            : "border-red-300 bg-red-50 text-red-800",
-        ].join(" ")}
-      >
+      <div className={"flex items-center gap-2 rounded-md border px-3 py-2 " + tone.box}>
         <span aria-hidden="true" className="text-base font-bold leading-none">
-          {allowed ? "✓" : "✕"}
+          {tone.glyph}
         </span>
-        <span className="text-sm font-semibold uppercase tracking-wide">
-          {allowed ? "Allowed" : "Blocked"}
-        </span>
+        <span className="text-sm font-semibold uppercase tracking-wide">{tone.label}</span>
       </div>
 
-      {allowed ? (
+      {decision === "allow" ? (
         <p className="mt-3 text-sm text-slate-500">No policy violations.</p>
       ) : (
         <div className="mt-3">
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Policy violations
+            {decision === "needs_approval" ? "Requires approval" : "Policy violations"}
           </h3>
           <ul className="flex flex-col gap-2">
-            {violations.map((violation, index) => (
-              <li
-                key={`${violation.rule}#${index}`}
-                className="rounded-md border border-red-200 bg-white p-3"
-              >
-                <code className="font-mono text-xs font-semibold text-red-700">
-                  {violation.rule}
-                </code>
-                <p className="mt-1 text-sm leading-snug text-slate-700">{violation.detail}</p>
-              </li>
-            ))}
+            {violations.map((violation, index) => {
+              const review = (violation.severity ?? "block") === "review";
+              return (
+                <li
+                  key={`${violation.rule}#${index}`}
+                  className={
+                    "rounded-md border bg-white p-3 " +
+                    (review ? "border-amber-200" : "border-red-200")
+                  }
+                >
+                  <code
+                    className={
+                      "font-mono text-xs font-semibold " +
+                      (review ? "text-amber-700" : "text-red-700")
+                    }
+                  >
+                    {violation.rule}
+                  </code>
+                  <p className="mt-1 text-sm leading-snug text-slate-700">{violation.detail}</p>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

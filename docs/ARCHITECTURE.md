@@ -13,11 +13,12 @@
         │                                                       │
         │   Researcher ──▶ Reasoner ──▶  Governance gate  ──▶   │
         │   (retrieve +    (propose ONE   evaluatePolicy()      │
-        │    summarize)     action)        allow / block        │
+        │    summarize)     action)    allow/block/needs-approval│
         │       │             │               │                 │
         │   provenance     ProposedAction      ▼                │
         │   (scored 0–1)   (+ provenance)  allow → Executor runs │
         │                                  block → Halt          │
+        │                                  needs-approval → Hold │
         └───────────────────────────────┬───────────────────────┘
                                          │  one TraceEvent per line (NDJSON)
                                          ▼
@@ -58,6 +59,7 @@ ISO-8601 `at`.
 | `gate_decision` | `stepId`, `decision` | after the gate |
 | `executed` | `stepId`, `result` | allow path only |
 | `halted` | `stepId`, `reason` | block path only |
+| `awaiting_approval` | `stepId`, `reason` | needs-approval path only |
 | `run_completed` | `runId` | once, last |
 | `error` | `message` | on any thrown failure |
 
@@ -69,8 +71,8 @@ ISO-8601 `at`.
 Provenance      = { sourceId: string; snippet: string; score: number /* [0,1] */ }
 ProposedAction  = { kind: string; payload: Record<string, unknown>;
                     justification: string; provenance: Provenance[] }
-PolicyViolation = { rule: string; detail: string }
-Decision        = "allow" | "block"
+PolicyViolation = { rule: string; detail: string; severity?: "block" | "review" }
+Decision        = "allow" | "block" | "needs_approval"
 PolicyDecision  = { decision: Decision; violations: PolicyViolation[]; evaluatedAt: string }
 ```
 
@@ -82,6 +84,8 @@ PolicyDecision  = { decision: Decision; violations: PolicyViolation[]; evaluated
   step_completed(executor) → run_completed`
 - **block** — `… → action_proposed → gate_decision(block) → halted →
   run_completed` (the Executor never starts)
+- **needs-approval** — `… → action_proposed → gate_decision(needs_approval) →
+  awaiting_approval → run_completed` (parked for a human; the Executor never starts)
 - any thrown error → a single `error` event, then `run_completed`.
 
 ## Cold start
@@ -103,13 +107,21 @@ lets the gate trust the scores. The default retriever is a bundled in-memory cor
 
 ## The gate
 
-Rules live in `lib/governance.ts`. `evaluatePolicy(action, rules)` returns `block`
-if **any** rule reports a violation, else `allow`. Thresholds are explicit:
+Rules live in `lib/governance.ts`. A rule returns a `PolicyViolation` (or `null`).
+`evaluatePolicy(action, rules)` resolves the tier: a hard **block** beats a
+**review** request, which beats **allow** — so `block` if any block-severity
+violation, else `needs_approval` if any review-severity one, else `allow`.
+Thresholds are explicit:
 
 | Rule | Applies to | Decides |
 |---|---|---|
-| `require-provenance` | every action | block if no supporting sources |
-| `no-unverified-external-send` | outbound `send_email` | block unless some source ≥ the confidence threshold (default **0.70**) |
+| `require-provenance` | every action | **block** if no supporting sources |
+| `no-unverified-external-send` | outbound `send_email` | **block** unless some source ≥ the confidence threshold (default **0.70**) |
+| `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data (SSN / card / phone) |
+| `destructive-action-needs-approval` | `delete_record` / destructive kinds | **needs-approval** unless an approval token is attached |
+
+The third state (`needs_approval`) models human-in-the-loop: the run parks at an
+**Awaiting approval** node instead of executing or hard-failing.
 
 ### Editable policy (the threshold is real, not cosmetic)
 

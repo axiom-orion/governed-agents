@@ -18,9 +18,12 @@ import type { TraceModel } from "../lib/trace-model";
 import { replayWithPolicy } from "../lib/policy-replay";
 import {
   allowRun,
+  approvalRun,
+  approvedRun,
   blockRun,
   buildTraceStream,
   INJECTED_MALFORMED_COUNT,
+  piiRun,
   toNdjson,
   withMalformedLines,
 } from "../mocks/trace.sample";
@@ -227,6 +230,63 @@ async function main(): Promise<void> {
     replayWithPolicy(allowRun, { externalSendThreshold: 0.99 }),
   );
   eqStr("policy@0.99: internal record still allowed", allowHighThreshold.status, "completed");
+
+  // --- new policy types + the third decision state --------------------------
+  // PII block: a high-confidence source passes the send threshold, but the body
+  // contains an SSN → blocked by no-pii-in-external-output regardless of threshold.
+  const pii = projectTrace(replayWithPolicy(piiRun, { externalSendThreshold: 0.7 }));
+  eqStr("pii: status halted", pii.status, "halted");
+  const piiGate = pii.nodes.find((n) => n.kind === "gate");
+  if (piiGate && piiGate.kind === "gate") {
+    eqStr("pii: decision = block", piiGate.decision.decision, "block");
+    eqStr(
+      "pii: violation rule",
+      piiGate.decision.violations[0]?.rule,
+      "no-pii-in-external-output",
+    );
+  } else {
+    check("pii: gate present", false);
+  }
+  const piiLowThreshold = projectTrace(replayWithPolicy(piiRun, { externalSendThreshold: 0.1 }));
+  eqStr("pii: still blocked even at a low send threshold", piiLowThreshold.status, "halted");
+
+  // Needs-approval: a destructive delete with no approval → the third state.
+  const approval = projectTrace(replayWithPolicy(approvalRun, { externalSendThreshold: 0.7 }));
+  eqStr("approval: status awaiting", approval.status, "awaiting");
+  const approvalGate = approval.nodes.find((n) => n.kind === "gate");
+  if (approvalGate && approvalGate.kind === "gate") {
+    eqStr("approval: decision = needs_approval", approvalGate.decision.decision, "needs_approval");
+  } else {
+    check("approval: gate present", false);
+  }
+  check(
+    "approval: an approval node is present (not halt, not executor)",
+    approval.nodes.some((n) => n.kind === "approval") &&
+      approval.nodes.every((n) => n.kind !== "halt") &&
+      approval.nodes.every((n) => !(n.kind === "step" && n.role === "executor")),
+  );
+
+  // Approval cleared: the same delete with an approval token attached → allow + run.
+  const approved = projectTrace(replayWithPolicy(approvedRun, { externalSendThreshold: 0.7 }));
+  eqStr("approved: status completed", approved.status, "completed");
+  const approvedGate = approved.nodes.find((n) => n.kind === "gate");
+  check(
+    "approved: decision = allow",
+    approvedGate?.kind === "gate" && approvedGate.decision.decision === "allow",
+  );
+  check(
+    "approved: executor runs",
+    approved.nodes.some((n) => n.kind === "step" && n.role === "executor"),
+  );
+
+  // The awaiting_approval event round-trips through the NDJSON parser.
+  const approvalParse = parseChunked(toNdjson(approvalRun), 9);
+  eqNum("approval: all events parse", approvalParse.events.length, approvalRun.length);
+  eqNum("approval: 0 malformed", approvalParse.malformed, 0);
+  check(
+    "approval: awaiting_approval event recovered",
+    approvalParse.events.some((e) => e.type === "awaiting_approval"),
+  );
 
   // --- degenerate inputs ----------------------------------------------------
   const empty = projectTrace([]);

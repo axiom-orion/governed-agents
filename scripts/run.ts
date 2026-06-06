@@ -64,7 +64,7 @@ async function main(): Promise<void> {
     console.log(`\n=== RUN: ${seed.id} — ${seed.label} ===`);
     console.log(`task: ${seed.task}\n`);
 
-    let outcome: "allow" | "block" | "error" | "?" = "?";
+    let outcome: "allow" | "block" | "needs_approval" | "error" | "?" = "?";
     for await (const event of runLoop(seed.task, createModelClient())) {
       // Print the raw NDJSON line (the wire format), prefixed with a readable tag.
       console.log(`${TAGS[event.type] ?? event.type} ${JSON.stringify(event)}`);

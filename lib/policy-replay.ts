@@ -22,6 +22,10 @@ function synthesizeExecuted(action: ProposedAction): string {
     const subject = typeof action.payload.subject === "string" ? action.payload.subject : undefined;
     return subject ? `Sent email to ${to} — “${subject}”.` : `Sent email to ${to}.`;
   }
+  if (action.kind === "delete_record") {
+    const count = typeof action.payload.count === "number" ? action.payload.count : undefined;
+    return count !== undefined ? `Deleted ${count} record(s).` : "Deleted the requested record(s).";
+  }
   return "Action executed.";
 }
 
@@ -84,6 +88,13 @@ export function replayWithPolicy(
         at: plusMs(baseAt, 380),
       },
     );
+  } else if (decision.decision === "needs_approval") {
+    const reason =
+      decision.violations
+        .filter((v) => (v.severity ?? "block") === "review")
+        .map((v) => `${v.rule}: ${v.detail}`)
+        .join("; ") || "awaiting human approval";
+    tail.push({ type: "awaiting_approval", stepId: actionStepId, reason, at: plusMs(baseAt, 120) });
   } else {
     const reason =
       decision.violations.map((v) => `${v.rule}: ${v.detail}`).join("; ") || "blocked by policy";

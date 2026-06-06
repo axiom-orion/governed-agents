@@ -7,7 +7,7 @@
 import type { AgentRole, Provenance, PolicyDecision, ProposedAction } from "./governance";
 import type { TraceEvent } from "./trace-events";
 
-export type RunStatus = "idle" | "running" | "completed" | "halted" | "error";
+export type RunStatus = "idle" | "running" | "completed" | "halted" | "awaiting" | "error";
 
 export interface StepNodeData {
   readonly kind: "step";
@@ -38,7 +38,15 @@ export interface HaltNodeData {
   readonly at: string;
 }
 
-export type TraceNode = StepNodeData | GateNodeData | HaltNodeData;
+export interface ApprovalNodeData {
+  readonly kind: "approval";
+  readonly id: string; // e.g. "approval:s2"
+  readonly stepId: string;
+  readonly reason: string;
+  readonly at: string;
+}
+
+export type TraceNode = StepNodeData | GateNodeData | HaltNodeData | ApprovalNodeData;
 
 export interface TraceEdge {
   readonly id: string;
@@ -76,6 +84,7 @@ interface StepAccum {
 const stepNodeId = (stepId: string): string => `step:${stepId}`;
 const gateNodeId = (stepId: string): string => `gate:${stepId}`;
 const haltNodeId = (stepId: string): string => `halt:${stepId}`;
+const approvalNodeId = (stepId: string): string => `approval:${stepId}`;
 
 export function projectTrace(events: readonly TraceEvent[]): TraceModel {
   let runId: string | undefined;
@@ -87,6 +96,7 @@ export function projectTrace(events: readonly TraceEvent[]): TraceModel {
   const stepAccum = new Map<string, StepAccum>();
   const gateById = new Map<string, GateNodeData>();
   const haltById = new Map<string, HaltNodeData>();
+  const approvalById = new Map<string, ApprovalNodeData>();
   // action_proposed / executed can (in a partial stream) arrive before the
   // step that carries their role; hold them until the step node exists.
   const pendingAction = new Map<string, ProposedAction>();
@@ -173,8 +183,24 @@ export function projectTrace(events: readonly TraceEvent[]): TraceModel {
         status = "halted";
         break;
       }
+      case "awaiting_approval": {
+        const id = approvalNodeId(event.stepId);
+        if (!approvalById.has(id)) {
+          approvalById.set(id, {
+            kind: "approval",
+            id,
+            stepId: event.stepId,
+            reason: event.reason,
+            at: event.at,
+          });
+          order.push(id);
+        }
+        status = "awaiting";
+        break;
+      }
       case "run_completed":
-        status = status === "halted" ? "halted" : "completed";
+        status =
+          status === "halted" ? "halted" : status === "awaiting" ? "awaiting" : "completed";
         break;
       case "error":
         status = "error";
@@ -209,6 +235,8 @@ export function projectTrace(events: readonly TraceEvent[]): TraceModel {
     if (gate) return [gate];
     const halt = haltById.get(id);
     if (halt) return [halt];
+    const approval = approvalById.get(id);
+    if (approval) return [approval];
     return [];
   });
 
