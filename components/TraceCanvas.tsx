@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { TraceModel, TraceNode } from "@/lib/trace-model";
 
-type TraceNodeData = { node: TraceNode; selected: boolean };
+type TraceNodeData = { node: TraceNode; selected: boolean; onActivate: () => void };
 type FlowNode = Node<TraceNodeData, "trace">;
 
 const ROLE_LABEL: Readonly<Record<string, string>> = {
@@ -48,8 +48,20 @@ function nodeLabel(node: TraceNode): string {
 
 function nodeBody(node: TraceNode): string {
   if (node.kind === "step") return node.summary ?? node.result ?? "In progress…";
-  if (node.kind === "gate") return node.decision.decision === "allow" ? "Allow" : "Block";
+  if (node.kind === "gate") return node.decision.decision === "allow" ? "Allowed" : "Blocked";
   return node.reason;
+}
+
+function ariaLabelFor(node: TraceNode): string {
+  if (node.kind === "step") {
+    return `${ROLE_LABEL[node.role] ?? node.role} step. ${
+      node.summary ?? node.result ?? "in progress"
+    }`;
+  }
+  if (node.kind === "gate") {
+    return `Gate decision: ${node.decision.decision === "allow" ? "allowed" : "blocked"}.`;
+  }
+  return `Halted: ${node.reason}`;
 }
 
 function clockFromIso(iso: string | undefined): string | null {
@@ -87,12 +99,27 @@ function cardClasses(node: TraceNode, selected: boolean): string {
 }
 
 function TraceFlowNode({ data }: NodeProps<FlowNode>) {
-  const { node, selected } = data;
+  const { node, selected, onActivate } = data;
   const time = nodeTime(node);
   const isGate = node.kind === "gate";
   const allowed = isGate && node.decision.decision === "allow";
   return (
-    <div className={cardClasses(node, selected)}>
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      aria-label={ariaLabelFor(node)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onActivate();
+        }
+      }}
+      className={
+        cardClasses(node, selected) +
+        " cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1"
+      }
+    >
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-slate-300" />
       <div className="flex items-center justify-between gap-2">
         <span
@@ -109,11 +136,13 @@ function TraceFlowNode({ data }: NodeProps<FlowNode>) {
         {isGate ? (
           <span
             className={
-              "inline-block h-2 w-2 shrink-0 rounded-full " +
-              (allowed ? "bg-emerald-500" : "bg-red-500")
+              "shrink-0 text-sm font-bold leading-none " +
+              (allowed ? "text-emerald-600" : "text-red-600")
             }
             aria-hidden="true"
-          />
+          >
+            {allowed ? "✓" : "✕"}
+          </span>
         ) : null}
         <p
           className={
@@ -150,13 +179,13 @@ function TraceFlow({ model, selectedId, onSelect }: TraceCanvasProps) {
         id: node.id,
         type: "trace",
         position: { x: index * COLUMN_GAP, y: 0 },
-        data: { node, selected: node.id === selectedId },
+        data: { node, selected: node.id === selectedId, onActivate: () => onSelect(node.id) },
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
         sourcePosition: Position.Right,
         targetPosition: Position.Left,
       })),
-    [model.nodes, selectedId],
+    [model.nodes, selectedId, onSelect],
   );
 
   const derivedEdges = useMemo<Edge[]>(

@@ -24,6 +24,7 @@ import {
   defaultSelectedId,
   gateForNode,
   provenanceForNode,
+  stepForNode,
 } from "@/lib/trace-model";
 import type {
   GateNodeData,
@@ -37,6 +38,7 @@ import { TraceCanvas } from "@/components/TraceCanvas";
 import { ProvenancePanel } from "@/components/panels/ProvenancePanel";
 import { GateDecision } from "@/components/panels/GateDecision";
 import { PoliciesPanel } from "@/components/panels/PoliciesPanel";
+import { StepDetail } from "@/components/panels/StepDetail";
 import { RawTraceDrawer } from "@/components/RawTraceDrawer";
 
 const REPO_URL = "https://github.com/axiom-orion/governed-agents";
@@ -155,6 +157,14 @@ export function TraceViewer() {
   );
   const gate = useMemo(() => gateForNode(model, effectiveSelectedId), [model, effectiveSelectedId]);
   const contextLabel = selectedContextLabel(model, effectiveSelectedId);
+  const selectedNode = useMemo(
+    () => model.nodes.find((n) => n.id === effectiveSelectedId),
+    [model, effectiveSelectedId],
+  );
+  const detailStep = useMemo(
+    () => stepForNode(model, effectiveSelectedId),
+    [model, effectiveSelectedId],
+  );
 
   const status = STATUS_STYLES[model.status];
 
@@ -233,7 +243,7 @@ export function TraceViewer() {
   return (
     <div className="flex min-h-screen flex-col bg-slate-50">
       <Hero onWatchBlock={watchBlocked} onExplore={exploreFreely} />
-      <section ref={toolRef} className="flex h-[92vh] min-h-[620px] flex-col">
+      <section ref={toolRef} className="flex flex-col lg:h-[92vh] lg:min-h-[620px]">
       <header className="border-b border-slate-200 bg-white px-5 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -395,7 +405,7 @@ export function TraceViewer() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div className="relative h-[50vh] w-full shrink-0 border-b border-slate-200 lg:h-full lg:flex-1 lg:shrink lg:border-b-0 lg:border-r lg:border-slate-200">
+        <div className="relative h-[55vh] w-full shrink-0 border-b border-slate-200 lg:h-full lg:flex-1 lg:shrink lg:border-b-0 lg:border-r lg:border-slate-200">
           <TraceCanvas model={model} selectedId={effectiveSelectedId} onSelect={setSelectedId} />
           {!started ? (
             <div className="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center">
@@ -407,11 +417,22 @@ export function TraceViewer() {
             </div>
           ) : null}
         </div>
-        <aside className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto bg-white p-5 lg:flex-none lg:basis-[380px]">
+        <aside className="flex flex-1 flex-col gap-5 bg-white p-5 lg:min-h-0 lg:flex-none lg:basis-[380px] lg:overflow-y-auto">
           {guided ? (
             <GuidedWalkthrough model={model} threshold={appliedThreshold} onExplore={exploreFreely} />
           ) : (
             <>
+              <StepDetail selectedNode={selectedNode} step={detailStep} />
+              <div className="border-t border-slate-100" />
+              <GateDecision gate={gate} />
+              <div className="border-t border-slate-100" />
+              <ProvenancePanel
+                sources={sources}
+                contextLabel={contextLabel}
+                threshold={appliedThreshold}
+                showThreshold={sendRuleApplies}
+              />
+              <div className="border-t border-slate-100" />
               <PoliciesPanel
                 threshold={sendThreshold}
                 appliedThreshold={appliedThreshold}
@@ -424,10 +445,6 @@ export function TraceViewer() {
                 sendRuleApplies={sendRuleApplies}
                 bestSendScore={bestSendScore}
               />
-              <div className="border-t border-slate-100" />
-              <GateDecision gate={gate} />
-              <div className="border-t border-slate-100" />
-              <ProvenancePanel sources={sources} contextLabel={contextLabel} />
             </>
           )}
         </aside>

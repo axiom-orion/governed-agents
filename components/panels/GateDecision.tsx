@@ -35,15 +35,11 @@ export function GateDecision({ gate }: { gate?: GateNodeData }) {
             : "border-red-300 bg-red-50 text-red-800",
         ].join(" ")}
       >
-        <span
-          className={[
-            "inline-block h-2.5 w-2.5 rounded-full",
-            allowed ? "bg-emerald-500" : "bg-red-500",
-          ].join(" ")}
-          aria-hidden="true"
-        />
+        <span aria-hidden="true" className="text-base font-bold leading-none">
+          {allowed ? "✓" : "✕"}
+        </span>
         <span className="text-sm font-semibold uppercase tracking-wide">
-          {allowed ? "Allow" : "Block"}
+          {allowed ? "Allowed" : "Blocked"}
         </span>
       </div>
 

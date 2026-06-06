@@ -256,6 +256,19 @@ export function provenanceForNode(
   return step.provenance;
 }
 
+/** The step whose detail the selected node represents: the node itself if it is a
+ * step, otherwise the step a gate/halt node references. */
+export function stepForNode(
+  model: TraceModel,
+  nodeId: string | null,
+): StepNodeData | undefined {
+  if (nodeId === null) return undefined;
+  const node = model.nodes.find((n) => n.id === nodeId);
+  if (!node) return undefined;
+  if (node.kind === "step") return node;
+  return findStepByStepId(model, node.stepId);
+}
+
 /** The gate decision relevant to the selected node, if any. */
 export function gateForNode(
   model: TraceModel,
