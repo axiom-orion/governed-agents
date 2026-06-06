@@ -7,9 +7,11 @@
 // (chunked + mid-line split, optionally with malformed lines injected to show they
 // are skipped) — useful offline and for demoing resilience.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTraceStream } from "@/lib/useTraceStream";
 import type { TraceStreamSource } from "@/lib/useTraceStream";
+import { Hero } from "@/components/Hero";
+import { GuidedWalkthrough } from "@/components/GuidedWalkthrough";
 import {
   buildTraceStream,
   INJECTED_MALFORMED_COUNT,
@@ -31,6 +33,9 @@ import { RawTraceDrawer } from "@/components/RawTraceDrawer";
 
 const REPO_URL = "https://github.com/axiom-orion/governed-agents";
 const ARCH_DOC_URL = `${REPO_URL}/blob/master/docs/ARCHITECTURE.md`;
+
+// Confidence the no-unverified-external-send rule requires. Becomes editable in Track 3.
+const SEND_THRESHOLD = 0.7;
 
 type DataMode = "live" | "sample";
 
@@ -71,6 +76,8 @@ export function TraceViewer() {
   const [replayNonce, setReplayNonce] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
+  const [guided, setGuided] = useState(false);
+  const toolRef = useRef<HTMLElement>(null);
 
   // Pre-warm the serverless function on mount with a cheap GET so the reviewer's
   // first Live click hits a warm lambda. Fire-and-forget; failures are harmless.
@@ -79,6 +86,10 @@ export function TraceViewer() {
     fetch("/api/run", { method: "GET", signal: controller.signal }).catch(() => {});
     return () => controller.abort();
   }, []);
+
+  const scrollToTool = (): void => {
+    requestAnimationFrame(() => toolRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   const source = useMemo<TraceStreamSource | null>(() => {
     if (!started) return null;
@@ -127,10 +138,30 @@ export function TraceViewer() {
     setRunId(id);
     setStarted(true);
     setReplayNonce((n) => n + 1);
+    setGuided(false); // manual runs drop into the raw tool
+  };
+
+  // Hero CTA: auto-select Sample + the blocked task and play it with the guided
+  // narration on, then bring the tool into view.
+  const watchBlocked = (): void => {
+    setMode("sample");
+    setRunId("block");
+    setStarted(true);
+    setReplayNonce((n) => n + 1);
+    setGuided(true);
+    scrollToTool();
+  };
+
+  // Hero secondary: drop straight into the raw tool, no narration.
+  const exploreFreely = (): void => {
+    setGuided(false);
+    scrollToTool();
   };
 
   return (
-    <div className="flex h-screen flex-col bg-slate-50">
+    <div className="flex min-h-screen flex-col bg-slate-50">
+      <Hero onWatchBlock={watchBlocked} onExplore={exploreFreely} />
+      <section ref={toolRef} className="flex h-[92vh] min-h-[620px] flex-col">
       <header className="border-b border-slate-200 bg-white px-5 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -305,11 +336,18 @@ export function TraceViewer() {
           ) : null}
         </div>
         <aside className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto bg-white p-5 lg:flex-none lg:basis-[380px]">
-          <GateDecision gate={gate} />
-          <div className="border-t border-slate-100" />
-          <ProvenancePanel sources={sources} contextLabel={contextLabel} />
+          {guided ? (
+            <GuidedWalkthrough model={model} threshold={SEND_THRESHOLD} onExplore={exploreFreely} />
+          ) : (
+            <>
+              <GateDecision gate={gate} />
+              <div className="border-t border-slate-100" />
+              <ProvenancePanel sources={sources} contextLabel={contextLabel} />
+            </>
+          )}
         </aside>
       </main>
+      </section>
 
       <RawTraceDrawer events={events} open={showRaw} onClose={() => setShowRaw(false)} />
     </div>
