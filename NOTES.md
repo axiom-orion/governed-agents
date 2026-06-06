@@ -265,3 +265,29 @@ The handoff suggests "branch per track," but this environment requires all work 
 **`claude/loving-clarke-tkolJ`** (no pushing to other branches without permission). Resolution:
 one branch, **one well-scoped commit per track**, opening a single PR. Both the **Live** and
 **Sample** paths must keep working after every commit.
+
+---
+
+## 10. Implementation status (living)
+
+| Track | Landed | Key files |
+|---|---|---|
+| **2 — backend visible + cold start** | ✅ | `lib/useTraceStream.ts` (warming/retry + prewarm), `components/RawTraceDrawer.tsx`, header caption, `docs/ARCHITECTURE.md` |
+| **1 — narrative + guided block** | ✅ | `components/Hero.tsx`, `components/GuidedWalkthrough.tsx`, `TraceViewer` restructure (scrollable page + bounded tool) |
+| **3 — editable policy** | ✅ | `lib/governance.ts` (`makeNoUnverifiedExternalSend`/`buildPolicy`), `lib/policy-replay.ts` (Sample recompute), `loop.ts`+`/api/run` (Live override), `components/panels/PoliciesPanel.tsx`, flip tracking |
+| **4 — detail polish + a11y** | ✅ | `components/panels/StepDetail.tsx`, `stepForNode()`, threshold-labeled `ProvenancePanel`, ✓/✕ gate, keyboard-focusable nodes, responsive layout |
+| **6 — more scenarios** | ✅ | third state `needs_approval` + `awaiting_approval` event across governance/loop/ndjson/trace-model/UI; PII + destructive rules; 3 new Sample fixtures; scenario registry |
+| **5 — portfolio artifacts** | ✅ | README rewrite (problem-first), `docs/architecture.svg`, design-decisions + what's-next; site already links to repo (Track 2) |
+
+**CI gates kept green throughout:** `typecheck`, `check:model`, `scripts/verify-trace.ts`
+(now **52 checks**, incl. the policy flip + all three new scenarios), offline `demo`
+(allow→allow, block→block).
+
+**Resolved corrections from §TL;DR:** the gate threshold is now configurable end-to-end;
+the Sample path recomputes the gate (no baked-in replay); Live ≠ Sample is intentional and
+both honor the edited policy. The two original seed tasks (`lib/tasks.ts`) are unchanged, so
+the offline demo contract still holds; new scenarios are recorded Sample fixtures.
+
+**Open / deliberately deferred:** the demo GIF + 90-second video are placeholders in the
+README (can't be captured here); the `needs_approval` state parks the run (an
+approve-to-continue affordance is in "What I'd build next").
