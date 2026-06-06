@@ -14,5 +14,6 @@ export type TraceEvent =
   | { type: "gate_decision"; stepId: string; decision: PolicyDecision; at: string }
   | { type: "executed"; stepId: string; result: string; at: string }
   | { type: "halted"; stepId: string; reason: string; at: string }
+  | { type: "awaiting_approval"; stepId: string; reason: string; at: string }
   | { type: "run_completed"; runId: string; at: string }
   | { type: "error"; message: string; at: string };

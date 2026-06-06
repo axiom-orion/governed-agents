@@ -209,11 +209,273 @@ export const blockRun: readonly TraceEvent[] = [
   { type: "run_completed", runId: "run_block_b704", at: "2026-06-02T15:09:17.240Z" },
 ];
 
-export type SampleRunId = "allow" | "block";
+// --- PII-LEAK BLOCK --------------------------------------------------------
+// A well-sourced action (high-confidence record) is still blocked because the
+// outbound email body contains personal data — a different rule from the
+// confidence threshold (no-pii-in-external-output).
+export const piiRun: readonly TraceEvent[] = [
+  {
+    type: "run_started",
+    runId: "run_pii_3a90",
+    task: "Email the customer's account summary, including their SSN, to the external auditor.",
+    at: "2026-06-03T10:00:00.000Z",
+  },
+  { type: "step_started", stepId: "p1", role: "researcher", at: "2026-06-03T10:00:00.200Z" },
+  {
+    type: "step_completed",
+    stepId: "p1",
+    role: "researcher",
+    summary: "Retrieved the customer's verified account record (high confidence).",
+    provenance: [
+      {
+        sourceId: "doc:customer-record#cus-7741",
+        snippet:
+          "Account holder verified; balance and plan current. Record flagged: contains personal data (SSN, DOB).",
+        score: 0.88,
+      },
+    ],
+    at: "2026-06-03T10:00:02.400Z",
+  },
+  { type: "step_started", stepId: "p2", role: "reasoner", at: "2026-06-03T10:00:02.500Z" },
+  {
+    type: "step_completed",
+    stepId: "p2",
+    role: "reasoner",
+    summary: "Drafted an account-summary email to the external auditor.",
+    provenance: [
+      {
+        sourceId: "doc:customer-record#cus-7741",
+        snippet:
+          "Account holder verified; balance and plan current. Record flagged: contains personal data (SSN, DOB).",
+        score: 0.88,
+      },
+    ],
+    at: "2026-06-03T10:00:04.600Z",
+  },
+  {
+    type: "action_proposed",
+    stepId: "p2",
+    action: {
+      kind: "send_email",
+      payload: {
+        to: "audit@third-party.example",
+        subject: "Account summary for review",
+        body: "Customer cus-7741, SSN 123-45-6789, current balance $4,120. Sending for your audit.",
+      },
+      justification: "Provide the requested account summary to the external auditor.",
+      provenance: [
+        {
+          sourceId: "doc:customer-record#cus-7741",
+          snippet:
+            "Account holder verified; balance and plan current. Record flagged: contains personal data (SSN, DOB).",
+          score: 0.88,
+        },
+      ],
+    },
+    at: "2026-06-03T10:00:04.700Z",
+  },
+  {
+    type: "gate_decision",
+    stepId: "p2",
+    decision: {
+      decision: "block",
+      violations: [
+        {
+          rule: "no-pii-in-external-output",
+          detail: "outbound message appears to contain a US Social Security number",
+          severity: "block",
+        },
+      ],
+      evaluatedAt: "2026-06-03T10:00:04.760Z",
+    },
+    at: "2026-06-03T10:00:04.760Z",
+  },
+  {
+    type: "halted",
+    stepId: "p2",
+    reason: "Action blocked by governance gate: no-pii-in-external-output.",
+    at: "2026-06-03T10:00:04.800Z",
+  },
+  { type: "run_completed", runId: "run_pii_3a90", at: "2026-06-03T10:00:04.840Z" },
+];
+
+// --- DESTRUCTIVE → NEEDS APPROVAL ------------------------------------------
+// An irreversible delete is neither allowed nor blocked: the gate parks it for a
+// human (the third decision state) via destructive-action-needs-approval.
+export const approvalRun: readonly TraceEvent[] = [
+  {
+    type: "run_started",
+    runId: "run_appr_b15c",
+    task: "Delete the 42 duplicate vendor records flagged by last night's dedupe job.",
+    at: "2026-06-04T08:30:00.000Z",
+  },
+  { type: "step_started", stepId: "a1", role: "researcher", at: "2026-06-04T08:30:00.180Z" },
+  {
+    type: "step_completed",
+    stepId: "a1",
+    role: "researcher",
+    summary: "Found the dedupe job output listing 42 duplicate vendor records.",
+    provenance: [
+      {
+        sourceId: "job:dedupe-2026-06-03#report",
+        snippet: "42 vendor records identified as exact duplicates of an existing canonical record.",
+        score: 0.81,
+      },
+    ],
+    at: "2026-06-04T08:30:02.300Z",
+  },
+  { type: "step_started", stepId: "a2", role: "reasoner", at: "2026-06-04T08:30:02.380Z" },
+  {
+    type: "step_completed",
+    stepId: "a2",
+    role: "reasoner",
+    summary: "Proposed deleting the 42 flagged duplicate vendor records.",
+    provenance: [
+      {
+        sourceId: "job:dedupe-2026-06-03#report",
+        snippet: "42 vendor records identified as exact duplicates of an existing canonical record.",
+        score: 0.81,
+      },
+    ],
+    at: "2026-06-04T08:30:04.500Z",
+  },
+  {
+    type: "action_proposed",
+    stepId: "a2",
+    action: {
+      kind: "delete_record",
+      payload: { collection: "vendors", count: 42, reason: "dedupe-2026-06-03" },
+      justification: "Remove the duplicate vendor records identified by the dedupe job.",
+      provenance: [
+        {
+          sourceId: "job:dedupe-2026-06-03#report",
+          snippet:
+            "42 vendor records identified as exact duplicates of an existing canonical record.",
+          score: 0.81,
+        },
+      ],
+    },
+    at: "2026-06-04T08:30:04.600Z",
+  },
+  {
+    type: "gate_decision",
+    stepId: "a2",
+    decision: {
+      decision: "needs_approval",
+      violations: [
+        {
+          rule: "destructive-action-needs-approval",
+          detail: "delete_record is irreversible and requires human approval before it runs",
+          severity: "review",
+        },
+      ],
+      evaluatedAt: "2026-06-04T08:30:04.660Z",
+    },
+    at: "2026-06-04T08:30:04.660Z",
+  },
+  {
+    type: "awaiting_approval",
+    stepId: "a2",
+    reason: "destructive-action-needs-approval: delete_record is irreversible and requires human approval before it runs",
+    at: "2026-06-04T08:30:04.700Z",
+  },
+  { type: "run_completed", runId: "run_appr_b15c", at: "2026-06-04T08:30:04.740Z" },
+];
+
+// --- APPROVED DESTRUCTIVE → ALLOW ------------------------------------------
+// The same delete, but with an approval token attached, clears the gate and runs —
+// showing the approval path resolving to allow.
+export const approvedRun: readonly TraceEvent[] = [
+  {
+    type: "run_started",
+    runId: "run_okok_c2d7",
+    task: "Delete the 42 duplicate vendor records — approved by the data steward (OPS-4821).",
+    at: "2026-06-04T09:15:00.000Z",
+  },
+  { type: "step_started", stepId: "k1", role: "researcher", at: "2026-06-04T09:15:00.180Z" },
+  {
+    type: "step_completed",
+    stepId: "k1",
+    role: "researcher",
+    summary: "Confirmed the dedupe job output and the attached steward approval OPS-4821.",
+    provenance: [
+      {
+        sourceId: "job:dedupe-2026-06-03#report",
+        snippet: "42 vendor records identified as exact duplicates of an existing canonical record.",
+        score: 0.81,
+      },
+      {
+        sourceId: "ticket:OPS-4821",
+        snippet: "Data steward approved deletion of the 42 flagged duplicates.",
+        score: 0.95,
+      },
+    ],
+    at: "2026-06-04T09:15:02.300Z",
+  },
+  { type: "step_started", stepId: "k2", role: "reasoner", at: "2026-06-04T09:15:02.380Z" },
+  {
+    type: "step_completed",
+    stepId: "k2",
+    role: "reasoner",
+    summary: "Proposed the approved deletion of the 42 duplicate vendor records.",
+    provenance: [
+      {
+        sourceId: "ticket:OPS-4821",
+        snippet: "Data steward approved deletion of the 42 flagged duplicates.",
+        score: 0.95,
+      },
+    ],
+    at: "2026-06-04T09:15:04.500Z",
+  },
+  {
+    type: "action_proposed",
+    stepId: "k2",
+    action: {
+      kind: "delete_record",
+      payload: { collection: "vendors", count: 42, approved: true, approvalToken: "OPS-4821" },
+      justification: "Remove the duplicate vendor records; deletion is approved (OPS-4821).",
+      provenance: [
+        {
+          sourceId: "ticket:OPS-4821",
+          snippet: "Data steward approved deletion of the 42 flagged duplicates.",
+          score: 0.95,
+        },
+      ],
+    },
+    at: "2026-06-04T09:15:04.600Z",
+  },
+  {
+    type: "gate_decision",
+    stepId: "k2",
+    decision: { decision: "allow", violations: [], evaluatedAt: "2026-06-04T09:15:04.660Z" },
+    at: "2026-06-04T09:15:04.660Z",
+  },
+  { type: "step_started", stepId: "k3", role: "executor", at: "2026-06-04T09:15:04.720Z" },
+  {
+    type: "executed",
+    stepId: "k3",
+    result: "Deleted 42 duplicate vendor records (approved via OPS-4821).",
+    at: "2026-06-04T09:15:05.200Z",
+  },
+  {
+    type: "step_completed",
+    stepId: "k3",
+    role: "executor",
+    summary: "Removed the 42 duplicate vendor records.",
+    provenance: [],
+    at: "2026-06-04T09:15:05.260Z",
+  },
+  { type: "run_completed", runId: "run_okok_c2d7", at: "2026-06-04T09:15:05.300Z" },
+];
+
+export type SampleRunId = "allow" | "block" | "pii" | "approval" | "approved";
 
 export const sampleRuns: Readonly<Record<SampleRunId, readonly TraceEvent[]>> = {
   allow: allowRun,
   block: blockRun,
+  pii: piiRun,
+  approval: approvalRun,
+  approved: approvedRun,
 };
 
 // --- serialization + replay ------------------------------------------------

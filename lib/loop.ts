@@ -5,7 +5,12 @@
 // as an `error` event — the loop never hangs, and always ends with `run_completed`.
 
 import { randomUUID } from "node:crypto";
-import { defaultPolicy, evaluatePolicy, type ProposedAction } from "./governance";
+import {
+  defaultPolicy,
+  evaluatePolicy,
+  type PolicyRule,
+  type ProposedAction,
+} from "./governance";
 import type { TraceEvent } from "./trace-events";
 import { runExecutor, runReasoner, runResearcher } from "./agents";
 import { createModelClient, type ModelClient } from "./model-client";
@@ -15,6 +20,7 @@ const now = (): string => new Date().toISOString();
 export async function* runLoop(
   task: string,
   client: ModelClient = createModelClient(),
+  policy: readonly PolicyRule[] = defaultPolicy,
 ): AsyncGenerator<TraceEvent> {
   const runId = randomUUID();
   yield { type: "run_started", runId, task, at: now() };
@@ -48,10 +54,10 @@ export async function* runLoop(
     yield { type: "action_proposed", stepId: reasonerStep, action, at: now() };
 
     // 3) Governance gate — allow or block.
-    const decision = evaluatePolicy(action, defaultPolicy);
+    const decision = evaluatePolicy(action, policy);
     yield { type: "gate_decision", stepId: reasonerStep, decision, at: now() };
 
-    // 4) Execute only on allow; otherwise halt with the policy rationale.
+    // 4) Execute only on allow; block halts the run; needs_approval parks it for a human.
     if (decision.decision === "allow") {
       const executorStep = `${runId}:executor`;
       yield { type: "step_started", stepId: executorStep, role: "executor", at: now() };
@@ -63,6 +69,17 @@ export async function* runLoop(
         role: "executor",
         summary: result,
         provenance: [...action.provenance],
+        at: now(),
+      };
+    } else if (decision.decision === "needs_approval") {
+      const reason = decision.violations
+        .filter((v) => (v.severity ?? "block") === "review")
+        .map((v) => `${v.rule}: ${v.detail}`)
+        .join("; ");
+      yield {
+        type: "awaiting_approval",
+        stepId: reasonerStep,
+        reason: reason.length > 0 ? reason : "awaiting human approval",
         at: now(),
       };
     } else {

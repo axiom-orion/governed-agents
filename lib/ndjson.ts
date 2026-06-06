@@ -53,7 +53,7 @@ function isPolicyViolation(x: unknown): x is PolicyViolation {
 function isPolicyDecision(x: unknown): x is PolicyDecision {
   return (
     isRecord(x) &&
-    (x.decision === "allow" || x.decision === "block") &&
+    (x.decision === "allow" || x.decision === "block" || x.decision === "needs_approval") &&
     Array.isArray(x.violations) &&
     x.violations.every(isPolicyViolation) &&
     isString(x.evaluatedAt)
@@ -93,6 +93,8 @@ export function isTraceEvent(x: unknown): x is TraceEvent {
     case "executed":
       return isString(x.stepId) && isString(x.result) && isString(x.at);
     case "halted":
+      return isString(x.stepId) && isString(x.reason) && isString(x.at);
+    case "awaiting_approval":
       return isString(x.stepId) && isString(x.reason) && isString(x.at);
     case "run_completed":
       return isString(x.runId) && isString(x.at);

@@ -15,11 +15,15 @@ import {
   provenanceForNode,
 } from "../lib/trace-model";
 import type { TraceModel } from "../lib/trace-model";
+import { replayWithPolicy } from "../lib/policy-replay";
 import {
   allowRun,
+  approvalRun,
+  approvedRun,
   blockRun,
   buildTraceStream,
   INJECTED_MALFORMED_COUNT,
+  piiRun,
   toNdjson,
   withMalformedLines,
 } from "../mocks/trace.sample";
@@ -176,6 +180,113 @@ async function main(): Promise<void> {
   const streamed = await parseStream(buildTraceStream(noisyNdjson, { chunkSize: 13 }));
   eqNum("noisy/stream: all valid events recovered", streamed.events.length, allowRun.length);
   eqNum("noisy/stream: malformed skipped", streamed.malformed, INJECTED_MALFORMED_COUNT);
+
+  // --- editable policy: the Sample replay recomputes the gate ----------------
+  // Default threshold (0.70): the under-sourced vendor email still blocks.
+  const blockAtDefault = projectTrace(replayWithPolicy(blockRun, { externalSendThreshold: 0.7 }));
+  eqStr("policy@0.70: blocked send stays halted", blockAtDefault.status, "halted");
+  const gateDefault = blockAtDefault.nodes.find((n) => n.kind === "gate");
+  if (gateDefault && gateDefault.kind === "gate") {
+    eqStr("policy@0.70: decision = block", gateDefault.decision.decision, "block");
+  } else {
+    check("policy@0.70: gate present", false);
+  }
+
+  // Lower the threshold to 0.50 (below the note's 0.55) → the SAME run now allows,
+  // and the executor runs. This is the real flip the UI surfaces.
+  const blockAtLow = projectTrace(replayWithPolicy(blockRun, { externalSendThreshold: 0.5 }));
+  eqStr("policy@0.50: blocked send now completes", blockAtLow.status, "completed");
+  const gateLow = blockAtLow.nodes.find((n) => n.kind === "gate");
+  if (gateLow && gateLow.kind === "gate") {
+    eqStr("policy@0.50: decision = allow", gateLow.decision.decision, "allow");
+    eqNum("policy@0.50: 0 violations", gateLow.decision.violations.length, 0);
+  } else {
+    check("policy@0.50: gate present", false);
+  }
+  check(
+    "policy@0.50: executor runs on the flip",
+    blockAtLow.nodes.some((n) => n.kind === "step" && n.role === "executor"),
+  );
+
+  // Boundary: >= means 0.55 allows, 0.56 blocks (the note scores exactly 0.55).
+  const gateAt055 = projectTrace(
+    replayWithPolicy(blockRun, { externalSendThreshold: 0.55 }),
+  ).nodes.find((n) => n.kind === "gate");
+  check(
+    "policy@0.55: allow (>= boundary)",
+    gateAt055?.kind === "gate" && gateAt055.decision.decision === "allow",
+  );
+  const gateAt056 = projectTrace(
+    replayWithPolicy(blockRun, { externalSendThreshold: 0.56 }),
+  ).nodes.find((n) => n.kind === "gate");
+  check(
+    "policy@0.56: block (above boundary)",
+    gateAt056?.kind === "gate" && gateAt056.decision.decision === "block",
+  );
+
+  // The internal write_record (allow run) is never gated by the send rule, so a high
+  // threshold leaves it allowed.
+  const allowHighThreshold = projectTrace(
+    replayWithPolicy(allowRun, { externalSendThreshold: 0.99 }),
+  );
+  eqStr("policy@0.99: internal record still allowed", allowHighThreshold.status, "completed");
+
+  // --- new policy types + the third decision state --------------------------
+  // PII block: a high-confidence source passes the send threshold, but the body
+  // contains an SSN → blocked by no-pii-in-external-output regardless of threshold.
+  const pii = projectTrace(replayWithPolicy(piiRun, { externalSendThreshold: 0.7 }));
+  eqStr("pii: status halted", pii.status, "halted");
+  const piiGate = pii.nodes.find((n) => n.kind === "gate");
+  if (piiGate && piiGate.kind === "gate") {
+    eqStr("pii: decision = block", piiGate.decision.decision, "block");
+    eqStr(
+      "pii: violation rule",
+      piiGate.decision.violations[0]?.rule,
+      "no-pii-in-external-output",
+    );
+  } else {
+    check("pii: gate present", false);
+  }
+  const piiLowThreshold = projectTrace(replayWithPolicy(piiRun, { externalSendThreshold: 0.1 }));
+  eqStr("pii: still blocked even at a low send threshold", piiLowThreshold.status, "halted");
+
+  // Needs-approval: a destructive delete with no approval → the third state.
+  const approval = projectTrace(replayWithPolicy(approvalRun, { externalSendThreshold: 0.7 }));
+  eqStr("approval: status awaiting", approval.status, "awaiting");
+  const approvalGate = approval.nodes.find((n) => n.kind === "gate");
+  if (approvalGate && approvalGate.kind === "gate") {
+    eqStr("approval: decision = needs_approval", approvalGate.decision.decision, "needs_approval");
+  } else {
+    check("approval: gate present", false);
+  }
+  check(
+    "approval: an approval node is present (not halt, not executor)",
+    approval.nodes.some((n) => n.kind === "approval") &&
+      approval.nodes.every((n) => n.kind !== "halt") &&
+      approval.nodes.every((n) => !(n.kind === "step" && n.role === "executor")),
+  );
+
+  // Approval cleared: the same delete with an approval token attached → allow + run.
+  const approved = projectTrace(replayWithPolicy(approvedRun, { externalSendThreshold: 0.7 }));
+  eqStr("approved: status completed", approved.status, "completed");
+  const approvedGate = approved.nodes.find((n) => n.kind === "gate");
+  check(
+    "approved: decision = allow",
+    approvedGate?.kind === "gate" && approvedGate.decision.decision === "allow",
+  );
+  check(
+    "approved: executor runs",
+    approved.nodes.some((n) => n.kind === "step" && n.role === "executor"),
+  );
+
+  // The awaiting_approval event round-trips through the NDJSON parser.
+  const approvalParse = parseChunked(toNdjson(approvalRun), 9);
+  eqNum("approval: all events parse", approvalParse.events.length, approvalRun.length);
+  eqNum("approval: 0 malformed", approvalParse.malformed, 0);
+  check(
+    "approval: awaiting_approval event recovered",
+    approvalParse.events.some((e) => e.type === "awaiting_approval"),
+  );
 
   // --- degenerate inputs ----------------------------------------------------
   const empty = projectTrace([]);

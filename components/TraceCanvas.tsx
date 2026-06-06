@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { TraceModel, TraceNode } from "@/lib/trace-model";
 
-type TraceNodeData = { node: TraceNode; selected: boolean };
+type TraceNodeData = { node: TraceNode; selected: boolean; onActivate: () => void };
 type FlowNode = Node<TraceNodeData, "trace">;
 
 const ROLE_LABEL: Readonly<Record<string, string>> = {
@@ -40,16 +40,36 @@ const ROLE_LABEL: Readonly<Record<string, string>> = {
   executor: "Executor",
 };
 
+const DECISION_WORD: Readonly<Record<string, string>> = {
+  allow: "Allowed",
+  block: "Blocked",
+  needs_approval: "Needs approval",
+};
+
 function nodeLabel(node: TraceNode): string {
   if (node.kind === "step") return ROLE_LABEL[node.role] ?? node.role;
   if (node.kind === "gate") return "Gate";
+  if (node.kind === "approval") return "Approval";
   return "Halt";
 }
 
 function nodeBody(node: TraceNode): string {
   if (node.kind === "step") return node.summary ?? node.result ?? "In progress…";
-  if (node.kind === "gate") return node.decision.decision === "allow" ? "Allow" : "Block";
-  return node.reason;
+  if (node.kind === "gate") return DECISION_WORD[node.decision.decision] ?? node.decision.decision;
+  return node.reason; // halt + approval
+}
+
+function ariaLabelFor(node: TraceNode): string {
+  if (node.kind === "step") {
+    return `${ROLE_LABEL[node.role] ?? node.role} step. ${
+      node.summary ?? node.result ?? "in progress"
+    }`;
+  }
+  if (node.kind === "gate") {
+    return `Gate decision: ${DECISION_WORD[node.decision.decision] ?? node.decision.decision}.`;
+  }
+  if (node.kind === "approval") return `Awaiting human approval: ${node.reason}`;
+  return `Halted: ${node.reason}`;
 }
 
 function clockFromIso(iso: string | undefined): string | null {
@@ -64,13 +84,16 @@ function nodeTime(node: TraceNode): string | null {
   return clockFromIso(node.at);
 }
 
+function gateTone(decision: string): { chip: string; border: string } {
+  if (decision === "allow") return { chip: "bg-emerald-100 text-emerald-700", border: " border-emerald-400" };
+  if (decision === "needs_approval") return { chip: "bg-amber-100 text-amber-800", border: " border-amber-400" };
+  return { chip: "bg-red-100 text-red-700", border: " border-red-400" };
+}
+
 function chipClasses(node: TraceNode): string {
-  if (node.kind === "gate") {
-    return node.decision.decision === "allow"
-      ? "bg-emerald-100 text-emerald-700"
-      : "bg-red-100 text-red-700";
-  }
+  if (node.kind === "gate") return gateTone(node.decision.decision).chip;
   if (node.kind === "halt") return "bg-red-100 text-red-700";
+  if (node.kind === "approval") return "bg-amber-100 text-amber-800";
   return "bg-slate-100 text-slate-600";
 }
 
@@ -78,21 +101,40 @@ function cardClasses(node: TraceNode, selected: boolean): string {
   const base =
     "flex h-full w-full flex-col justify-center overflow-hidden rounded-lg border bg-white px-3 py-2.5 shadow-sm transition-colors";
   const ring = selected ? " ring-2 ring-blue-500 ring-offset-1" : "";
-  if (node.kind === "gate") {
-    const tone = node.decision.decision === "allow" ? " border-emerald-400" : " border-red-400";
-    return base + tone + ring;
-  }
+  if (node.kind === "gate") return base + gateTone(node.decision.decision).border + ring;
   if (node.kind === "halt") return base + " border-red-300 bg-red-50" + ring;
+  if (node.kind === "approval") return base + " border-amber-300 bg-amber-50" + ring;
   return base + " border-slate-300" + ring;
 }
 
+const GATE_GLYPH: Readonly<Record<string, { glyph: string; tone: string }>> = {
+  allow: { glyph: "✓", tone: "text-emerald-600" },
+  block: { glyph: "✕", tone: "text-red-600" },
+  needs_approval: { glyph: "⏸", tone: "text-amber-600" },
+};
+
 function TraceFlowNode({ data }: NodeProps<FlowNode>) {
-  const { node, selected } = data;
+  const { node, selected, onActivate } = data;
   const time = nodeTime(node);
   const isGate = node.kind === "gate";
-  const allowed = isGate && node.decision.decision === "allow";
+  const gateGlyph = isGate ? GATE_GLYPH[node.decision.decision] : undefined;
   return (
-    <div className={cardClasses(node, selected)}>
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      aria-label={ariaLabelFor(node)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onActivate();
+        }
+      }}
+      className={
+        cardClasses(node, selected) +
+        " cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1"
+      }
+    >
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-slate-300" />
       <div className="flex items-center justify-between gap-2">
         <span
@@ -106,14 +148,13 @@ function TraceFlowNode({ data }: NodeProps<FlowNode>) {
         {time ? <span className="font-mono text-[10px] text-slate-400">{time}</span> : null}
       </div>
       <div className="mt-1.5 flex items-center gap-1.5">
-        {isGate ? (
+        {gateGlyph ? (
           <span
-            className={
-              "inline-block h-2 w-2 shrink-0 rounded-full " +
-              (allowed ? "bg-emerald-500" : "bg-red-500")
-            }
+            className={"shrink-0 text-sm font-bold leading-none " + gateGlyph.tone}
             aria-hidden="true"
-          />
+          >
+            {gateGlyph.glyph}
+          </span>
         ) : null}
         <p
           className={
@@ -150,13 +191,13 @@ function TraceFlow({ model, selectedId, onSelect }: TraceCanvasProps) {
         id: node.id,
         type: "trace",
         position: { x: index * COLUMN_GAP, y: 0 },
-        data: { node, selected: node.id === selectedId },
+        data: { node, selected: node.id === selectedId, onActivate: () => onSelect(node.id) },
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
         sourcePosition: Position.Right,
         targetPosition: Position.Left,
       })),
-    [model.nodes, selectedId],
+    [model.nodes, selectedId, onSelect],
   );
 
   const derivedEdges = useMemo<Edge[]>(
