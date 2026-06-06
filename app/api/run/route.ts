@@ -5,6 +5,8 @@
 
 import { runLoop } from "@/lib/loop";
 import { SEED_TASKS, getTask } from "@/lib/tasks";
+import { buildPolicy } from "@/lib/governance";
+import { createModelClient } from "@/lib/model-client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +18,16 @@ export const maxDuration = 60;
 interface RunRequest {
   readonly task?: string;
   readonly taskId?: string;
+  /** Optional gate override so an edited policy flips a real Live run, not just Sample. */
+  readonly externalSendThreshold?: number;
+}
+
+function readThreshold(policy: unknown): number | undefined {
+  if (typeof policy !== "object" || policy === null) return undefined;
+  const value = (policy as Record<string, unknown>).externalSendThreshold;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(1, Math.max(0, value))
+    : undefined;
 }
 
 function readRunRequest(body: unknown): RunRequest {
@@ -24,6 +36,7 @@ function readRunRequest(body: unknown): RunRequest {
   return {
     task: typeof rec.task === "string" ? rec.task : undefined,
     taskId: typeof rec.taskId === "string" ? rec.taskId : undefined,
+    externalSendThreshold: readThreshold(rec.policy),
   };
 }
 
@@ -42,7 +55,7 @@ export async function POST(req: Request): Promise<Response> {
   } catch {
     // empty / non-JSON body is allowed; fall through to validation
   }
-  const { task, taskId } = readRunRequest(parsed);
+  const { task, taskId, externalSendThreshold } = readRunRequest(parsed);
 
   let resolvedTask = task;
   if (resolvedTask === undefined && taskId !== undefined) {
@@ -63,11 +76,12 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const taskText = resolvedTask;
+  const policy = buildPolicy({ externalSendThreshold });
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        for await (const event of runLoop(taskText)) {
+        for await (const event of runLoop(taskText, createModelClient(), policy)) {
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
         }
       } catch (err) {

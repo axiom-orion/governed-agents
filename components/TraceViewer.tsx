@@ -25,19 +25,26 @@ import {
   gateForNode,
   provenanceForNode,
 } from "@/lib/trace-model";
-import type { RunStatus, TraceModel } from "@/lib/trace-model";
+import type {
+  GateNodeData,
+  RunStatus,
+  StepNodeData,
+  TraceModel,
+} from "@/lib/trace-model";
+import { replayWithPolicy } from "@/lib/policy-replay";
+import { DEFAULT_SEND_THRESHOLD, type Decision } from "@/lib/governance";
 import { TraceCanvas } from "@/components/TraceCanvas";
 import { ProvenancePanel } from "@/components/panels/ProvenancePanel";
 import { GateDecision } from "@/components/panels/GateDecision";
+import { PoliciesPanel } from "@/components/panels/PoliciesPanel";
 import { RawTraceDrawer } from "@/components/RawTraceDrawer";
 
 const REPO_URL = "https://github.com/axiom-orion/governed-agents";
 const ARCH_DOC_URL = `${REPO_URL}/blob/master/docs/ARCHITECTURE.md`;
 
-// Confidence the no-unverified-external-send rule requires. Becomes editable in Track 3.
-const SEND_THRESHOLD = 0.7;
-
 type DataMode = "live" | "sample";
+
+const keyOf = (mode: DataMode, runId: SampleRunId): string => `${mode}:${runId}`;
 
 // `id` selects the sample run; `taskId` is the seed task the live route understands.
 const RUN_OPTIONS: ReadonlyArray<{ id: SampleRunId; taskId: string; label: string }> = [
@@ -77,7 +84,16 @@ export function TraceViewer() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
   const [guided, setGuided] = useState(false);
+  // Editable policy: `sendThreshold` is what the slider shows; `appliedThreshold`
+  // is what the currently-playing run actually used. They diverge while editing
+  // and re-converge on re-run, so the UI can prompt "re-run to apply".
+  const [sendThreshold, setSendThreshold] = useState(DEFAULT_SEND_THRESHOLD);
+  const [appliedThreshold, setAppliedThreshold] = useState(DEFAULT_SEND_THRESHOLD);
   const toolRef = useRef<HTMLElement>(null);
+  // Decision-flip tracking: the last decision recorded per scenario, and the
+  // baseline captured at the moment a re-run starts (so we can show BLOCK → ALLOW).
+  const lastDecisionRef = useRef<Record<string, Decision>>({});
+  const baselineRef = useRef<Decision | undefined>(undefined);
 
   // Pre-warm the serverless function on mount with a cheap GET so the reviewer's
   // first Live click hits a warm lambda. Fire-and-forget; failures are harmless.
@@ -103,17 +119,25 @@ export function TraceViewer() {
         init: {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ taskId: option?.taskId ?? "allowed" }),
+          // The edited policy flows to the real backend, so a Live re-run flips too.
+          body: JSON.stringify({
+            taskId: option?.taskId ?? "allowed",
+            policy: { externalSendThreshold: appliedThreshold },
+          }),
         },
       };
     }
-    const events = sampleRuns[runId];
+    // Sample: recompute the gate over the recorded action under the active policy,
+    // so the decision is real (not the fixture's baked-in one) and flips on edit.
+    const events = replayWithPolicy(sampleRuns[runId], {
+      externalSendThreshold: appliedThreshold,
+    });
     const ndjson = injectNoise ? withMalformedLines(toNdjson(events)) : toNdjson(events);
     return {
       kind: "stream",
       open: () => buildTraceStream(ndjson, { chunkSize: 256, delayMs: 60 }),
     };
-  }, [started, mode, runId, injectNoise, replayNonce]);
+  }, [started, mode, runId, injectNoise, replayNonce, appliedThreshold]);
 
   const { model, events, malformedCount, connection, warmupAttempt, streamError } =
     useTraceStream(source);
@@ -134,20 +158,68 @@ export function TraceViewer() {
 
   const status = STATUS_STYLES[model.status];
 
-  const runTask = (id: SampleRunId): void => {
+  // The current run's gate decision + the action it gated (for the Policies panel).
+  const currentDecision = useMemo<Decision | undefined>(() => {
+    const node = model.nodes.find((n): n is GateNodeData => n.kind === "gate");
+    return node?.decision.decision;
+  }, [model]);
+
+  const gatedAction = useMemo(() => {
+    const reasoner = model.nodes.find(
+      (n): n is StepNodeData => n.kind === "step" && n.role === "reasoner",
+    );
+    return reasoner?.proposedAction;
+  }, [model]);
+
+  const sendRuleApplies = gatedAction?.kind === "send_email";
+  const bestSendScore = useMemo<number | undefined>(() => {
+    const provenance = gatedAction?.provenance ?? [];
+    return provenance.length > 0 ? Math.max(...provenance.map((p) => p.score)) : undefined;
+  }, [gatedAction]);
+
+  // Record the decision for this scenario so the next re-run can compare against it.
+  useEffect(() => {
+    if (currentDecision) lastDecisionRef.current[keyOf(mode, runId)] = currentDecision;
+  }, [currentDecision, mode, runId]);
+
+  // Flip = the baseline captured at re-run time differs from the current decision.
+  const flip = useMemo<{ from: Decision; to: Decision } | null>(() => {
+    const from = baselineRef.current;
+    if (from && currentDecision && from !== currentDecision) return { from, to: currentDecision };
+    return null;
+  }, [currentDecision]);
+
+  const dirty = Math.abs(sendThreshold - appliedThreshold) > 1e-9;
+
+  // Start a run, snapshotting the scenario's previous decision as the flip baseline.
+  const startRun = (nextMode: DataMode, id: SampleRunId, threshold: number): void => {
+    baselineRef.current = lastDecisionRef.current[keyOf(nextMode, id)];
+    setMode(nextMode);
     setRunId(id);
+    setSendThreshold(threshold);
+    setAppliedThreshold(threshold);
     setStarted(true);
     setReplayNonce((n) => n + 1);
+  };
+
+  const runTask = (id: SampleRunId): void => {
+    startRun(mode, id, appliedThreshold); // keep the active policy
     setGuided(false); // manual runs drop into the raw tool
   };
 
-  // Hero CTA: auto-select Sample + the blocked task and play it with the guided
-  // narration on, then bring the tool into view.
-  const watchBlocked = (): void => {
-    setMode("sample");
-    setRunId("block");
+  // Apply the edited threshold and re-run the current scenario.
+  const applyPolicyAndRerun = (threshold: number): void => {
+    baselineRef.current = lastDecisionRef.current[keyOf(mode, runId)];
+    setSendThreshold(threshold);
+    setAppliedThreshold(threshold);
     setStarted(true);
     setReplayNonce((n) => n + 1);
+  };
+
+  // Hero CTA: Sample + the blocked task at the DEFAULT threshold (so it really
+  // blocks), guided narration on, then bring the tool into view.
+  const watchBlocked = (): void => {
+    startRun("sample", "block", DEFAULT_SEND_THRESHOLD);
     setGuided(true);
     scrollToTool();
   };
@@ -337,9 +409,22 @@ export function TraceViewer() {
         </div>
         <aside className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto bg-white p-5 lg:flex-none lg:basis-[380px]">
           {guided ? (
-            <GuidedWalkthrough model={model} threshold={SEND_THRESHOLD} onExplore={exploreFreely} />
+            <GuidedWalkthrough model={model} threshold={appliedThreshold} onExplore={exploreFreely} />
           ) : (
             <>
+              <PoliciesPanel
+                threshold={sendThreshold}
+                appliedThreshold={appliedThreshold}
+                defaultThreshold={DEFAULT_SEND_THRESHOLD}
+                dirty={dirty}
+                onThresholdChange={setSendThreshold}
+                onRerun={() => applyPolicyAndRerun(sendThreshold)}
+                onReset={() => applyPolicyAndRerun(DEFAULT_SEND_THRESHOLD)}
+                flip={flip}
+                sendRuleApplies={sendRuleApplies}
+                bestSendScore={bestSendScore}
+              />
+              <div className="border-t border-slate-100" />
               <GateDecision gate={gate} />
               <div className="border-t border-slate-100" />
               <ProvenancePanel sources={sources} contextLabel={contextLabel} />

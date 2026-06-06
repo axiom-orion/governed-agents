@@ -15,6 +15,7 @@ import {
   provenanceForNode,
 } from "../lib/trace-model";
 import type { TraceModel } from "../lib/trace-model";
+import { replayWithPolicy } from "../lib/policy-replay";
 import {
   allowRun,
   blockRun,
@@ -176,6 +177,56 @@ async function main(): Promise<void> {
   const streamed = await parseStream(buildTraceStream(noisyNdjson, { chunkSize: 13 }));
   eqNum("noisy/stream: all valid events recovered", streamed.events.length, allowRun.length);
   eqNum("noisy/stream: malformed skipped", streamed.malformed, INJECTED_MALFORMED_COUNT);
+
+  // --- editable policy: the Sample replay recomputes the gate ----------------
+  // Default threshold (0.70): the under-sourced vendor email still blocks.
+  const blockAtDefault = projectTrace(replayWithPolicy(blockRun, { externalSendThreshold: 0.7 }));
+  eqStr("policy@0.70: blocked send stays halted", blockAtDefault.status, "halted");
+  const gateDefault = blockAtDefault.nodes.find((n) => n.kind === "gate");
+  if (gateDefault && gateDefault.kind === "gate") {
+    eqStr("policy@0.70: decision = block", gateDefault.decision.decision, "block");
+  } else {
+    check("policy@0.70: gate present", false);
+  }
+
+  // Lower the threshold to 0.50 (below the note's 0.55) → the SAME run now allows,
+  // and the executor runs. This is the real flip the UI surfaces.
+  const blockAtLow = projectTrace(replayWithPolicy(blockRun, { externalSendThreshold: 0.5 }));
+  eqStr("policy@0.50: blocked send now completes", blockAtLow.status, "completed");
+  const gateLow = blockAtLow.nodes.find((n) => n.kind === "gate");
+  if (gateLow && gateLow.kind === "gate") {
+    eqStr("policy@0.50: decision = allow", gateLow.decision.decision, "allow");
+    eqNum("policy@0.50: 0 violations", gateLow.decision.violations.length, 0);
+  } else {
+    check("policy@0.50: gate present", false);
+  }
+  check(
+    "policy@0.50: executor runs on the flip",
+    blockAtLow.nodes.some((n) => n.kind === "step" && n.role === "executor"),
+  );
+
+  // Boundary: >= means 0.55 allows, 0.56 blocks (the note scores exactly 0.55).
+  const gateAt055 = projectTrace(
+    replayWithPolicy(blockRun, { externalSendThreshold: 0.55 }),
+  ).nodes.find((n) => n.kind === "gate");
+  check(
+    "policy@0.55: allow (>= boundary)",
+    gateAt055?.kind === "gate" && gateAt055.decision.decision === "allow",
+  );
+  const gateAt056 = projectTrace(
+    replayWithPolicy(blockRun, { externalSendThreshold: 0.56 }),
+  ).nodes.find((n) => n.kind === "gate");
+  check(
+    "policy@0.56: block (above boundary)",
+    gateAt056?.kind === "gate" && gateAt056.decision.decision === "block",
+  );
+
+  // The internal write_record (allow run) is never gated by the send rule, so a high
+  // threshold leaves it allowed.
+  const allowHighThreshold = projectTrace(
+    replayWithPolicy(allowRun, { externalSendThreshold: 0.99 }),
+  );
+  eqStr("policy@0.99: internal record still allowed", allowHighThreshold.status, "completed");
 
   // --- degenerate inputs ----------------------------------------------------
   const empty = projectTrace([]);

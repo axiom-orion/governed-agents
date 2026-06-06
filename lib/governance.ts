@@ -62,6 +62,16 @@ export function evaluatePolicy(
 }
 
 // --- example policy set (pre-action gating) -------------------------------
+
+/** Default confidence an outbound send needs from at least one source. */
+export const DEFAULT_SEND_THRESHOLD = 0.7;
+
+/** Tunable knobs for {@link buildPolicy}; everything has a safe default. */
+export interface PolicyConfig {
+  /** Min provenance score (in [0,1]) an external send needs; default 0.7. */
+  readonly externalSendThreshold?: number;
+}
+
 export const requireProvenance: PolicyRule = {
   name: "require-provenance",
   evaluate: (a) =>
@@ -70,19 +80,37 @@ export const requireProvenance: PolicyRule = {
       : null,
 };
 
-export const noUnverifiedExternalSend: PolicyRule = {
-  name: "no-unverified-external-send",
-  evaluate: (a) => {
-    if (a.kind !== "send_email") return null;
-    const to = typeof a.payload.to === "string" ? a.payload.to : "";
-    const hasHighConfidenceSource = a.provenance.some((p) => p.score >= 0.7);
-    return to.length > 0 && !hasHighConfidenceSource
-      ? { rule: "no-unverified-external-send", detail: `outbound to ${to} lacks a high-confidence source` }
-      : null;
-  },
-};
+/**
+ * Factory for the outbound-send rule with a configurable confidence threshold.
+ * The threshold is the single knob the UI exposes: lower it below a source's
+ * score and a previously-blocked send flips to allow — a real change in the gate,
+ * not a cosmetic one.
+ */
+export function makeNoUnverifiedExternalSend(
+  threshold: number = DEFAULT_SEND_THRESHOLD,
+): PolicyRule {
+  return {
+    name: "no-unverified-external-send",
+    evaluate: (a) => {
+      if (a.kind !== "send_email") return null;
+      const to = typeof a.payload.to === "string" ? a.payload.to : "";
+      const hasHighConfidenceSource = a.provenance.some((p) => p.score >= threshold);
+      return to.length > 0 && !hasHighConfidenceSource
+        ? {
+            rule: "no-unverified-external-send",
+            detail: `outbound to ${to} lacks a source scoring ≥ ${threshold.toFixed(2)}`,
+          }
+        : null;
+    },
+  };
+}
 
-export const defaultPolicy: readonly PolicyRule[] = [
-  requireProvenance,
-  noUnverifiedExternalSend,
-];
+/** The outbound-send rule at the default threshold (kept for the frozen contract). */
+export const noUnverifiedExternalSend: PolicyRule = makeNoUnverifiedExternalSend();
+
+/** Assemble the active policy from a config; rule order is stable. */
+export function buildPolicy(config: PolicyConfig = {}): readonly PolicyRule[] {
+  return [requireProvenance, makeNoUnverifiedExternalSend(config.externalSendThreshold)];
+}
+
+export const defaultPolicy: readonly PolicyRule[] = buildPolicy();
