@@ -42,7 +42,7 @@ import { StepDetail } from "@/components/panels/StepDetail";
 import { RawTraceDrawer } from "@/components/RawTraceDrawer";
 
 const REPO_URL = "https://github.com/axiom-orion/governed-agents";
-const ARCH_DOC_URL = `${REPO_URL}/blob/master/docs/ARCHITECTURE.md`;
+const ARCH_DOC_URL = `${REPO_URL}/blob/main/docs/ARCHITECTURE.md`;
 
 type DataMode = "live" | "sample";
 
