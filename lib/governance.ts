@@ -25,6 +25,26 @@ export interface ProposedAction {
   readonly payload: Readonly<Record<string, unknown>>;
   readonly justification: string;
   readonly provenance: readonly Provenance[];
+  /** Present when the action was decided by a multi-model vote (the triad). */
+  readonly consensus?: Consensus;
+}
+
+/** One model's vote in a multi-model action proposal. */
+export interface ModelVote {
+  readonly model: string; // provider label, e.g. "claude" | "gemini" | "grok"
+  readonly kind: string; // the action kind this model proposed
+  readonly justification: string;
+  /** True when the provider was unavailable (no key) or its call failed. */
+  readonly abstained?: boolean;
+}
+
+/** Outcome of aggregating the triad's votes for one action. */
+export interface Consensus {
+  readonly votes: readonly ModelVote[];
+  /** Share of participating (non-abstaining) models that backed the chosen kind, [0,1]. */
+  readonly agreementRatio: number;
+  /** The action kind the participating models most agreed on. */
+  readonly chosenKind: string;
 }
 
 // Three-tier outcome: a clean action is allowed; a hard violation blocks; a
@@ -73,10 +93,15 @@ export function evaluatePolicy(
 /** Default confidence an outbound send needs from at least one source. */
 export const DEFAULT_SEND_THRESHOLD = 0.7;
 
+/** Default share of the triad that must agree on the action (1.0 = unanimous). */
+export const DEFAULT_CONSENSUS_THRESHOLD = 1.0;
+
 /** Tunable knobs for {@link buildPolicy}; everything has a safe default. */
 export interface PolicyConfig {
   /** Min provenance score (in [0,1]) an external send needs; default 0.7. */
   readonly externalSendThreshold?: number;
+  /** Min agreement among the triad (in [0,1]) before acting; default 1.0 (unanimous). */
+  readonly consensusThreshold?: number;
 }
 
 export const requireProvenance: PolicyRule = {
@@ -170,6 +195,41 @@ export const destructiveNeedsApproval: PolicyRule = {
   },
 };
 
+function describeSplit(consensus: Consensus): string {
+  const tally = consensus.votes
+    .map((v) => `${v.model}: ${v.abstained ? "abstained" : v.kind}`)
+    .join(", ");
+  return tally;
+}
+
+/**
+ * Require the triad of models to agree before acting. Only meaningful once at
+ * least two models actually voted; below `threshold` agreement, the action is
+ * routed to a human (needs_approval) rather than executed on a split decision.
+ */
+export function makeRequireModelConsensus(
+  threshold: number = DEFAULT_CONSENSUS_THRESHOLD,
+): PolicyRule {
+  return {
+    name: "require-model-consensus",
+    evaluate: (a) => {
+      const consensus = a.consensus;
+      if (consensus === undefined) return null;
+      const participating = consensus.votes.filter((v) => v.abstained !== true).length;
+      if (participating < 2) return null; // need ≥2 models for a disagreement to mean anything
+      return consensus.agreementRatio < threshold
+        ? {
+            rule: "require-model-consensus",
+            detail: `models disagreed (${describeSplit(consensus)}) — ${Math.round(
+              consensus.agreementRatio * 100,
+            )}% agreement is below the ${Math.round(threshold * 100)}% required`,
+            severity: "review",
+          }
+        : null;
+    },
+  };
+}
+
 /** Assemble the active policy from a config; rule order is stable. */
 export function buildPolicy(config: PolicyConfig = {}): readonly PolicyRule[] {
   return [
@@ -177,6 +237,7 @@ export function buildPolicy(config: PolicyConfig = {}): readonly PolicyRule[] {
     makeNoUnverifiedExternalSend(config.externalSendThreshold),
     noPiiInExternalOutput,
     destructiveNeedsApproval,
+    makeRequireModelConsensus(config.consensusThreshold),
   ];
 }
 

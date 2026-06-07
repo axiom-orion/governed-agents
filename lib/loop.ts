@@ -12,7 +12,9 @@ import {
   type ProposedAction,
 } from "./governance";
 import type { TraceEvent } from "./trace-events";
-import { runExecutor, runReasoner, runResearcher } from "./agents";
+import { runExecutor, runResearcher } from "./agents";
+import { runConsensusReasoner } from "./consensus";
+import { createReasonerVoters } from "./providers";
 import { createModelClient, type ModelClient } from "./model-client";
 
 const now = (): string => new Date().toISOString();
@@ -39,10 +41,16 @@ export async function* runLoop(
       at: now(),
     };
 
-    // 2) Reasoner — propose exactly one action (provenance carried from retrieval).
+    // 2) Reasoner — propose exactly one action via the model triad (provenance
+    // carried from retrieval). With one voter this is the single-model path; with
+    // Gemini/Grok keys present it votes and attaches the consensus for the gate.
     const reasonerStep = `${runId}:reasoner`;
     yield { type: "step_started", stepId: reasonerStep, role: "reasoner", at: now() };
-    const action: ProposedAction = await runReasoner(task, finding, client);
+    const action: ProposedAction = await runConsensusReasoner(
+      task,
+      finding,
+      createReasonerVoters(client),
+    );
     yield {
       type: "step_completed",
       stepId: reasonerStep,

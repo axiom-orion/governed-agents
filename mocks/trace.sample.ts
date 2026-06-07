@@ -468,7 +468,198 @@ export const approvedRun: readonly TraceEvent[] = [
   { type: "run_completed", runId: "run_okok_c2d7", at: "2026-06-04T09:15:05.300Z" },
 ];
 
-export type SampleRunId = "allow" | "block" | "pii" | "approval" | "approved";
+// --- TRIAD CONSENSUS: AGREE → ALLOW ----------------------------------------
+// All three models independently propose the same internal write_record. The
+// gate's require-model-consensus rule is satisfied (unanimous), so the action runs.
+export const consensusRun: readonly TraceEvent[] = [
+  {
+    type: "run_started",
+    runId: "run_triad_1c0a",
+    task: "Summarize the Q3 incident retro and record an internal summary for the on-call team.",
+    at: "2026-06-05T11:00:00.000Z",
+  },
+  { type: "step_started", stepId: "c1", role: "researcher", at: "2026-06-05T11:00:00.200Z" },
+  {
+    type: "step_completed",
+    stepId: "c1",
+    role: "researcher",
+    summary: "Retrieved the Q3 incident retro notes (high confidence).",
+    provenance: [
+      {
+        sourceId: "doc:incident-retro-2026-q3",
+        snippet: "Root cause, timeline, and three remediation items agreed in the Q3 retro.",
+        score: 0.9,
+      },
+    ],
+    at: "2026-06-05T11:00:02.300Z",
+  },
+  { type: "step_started", stepId: "c2", role: "reasoner", at: "2026-06-05T11:00:02.380Z" },
+  {
+    type: "step_completed",
+    stepId: "c2",
+    role: "reasoner",
+    summary: "All three models proposed an internal write_record — unanimous.",
+    provenance: [
+      {
+        sourceId: "doc:incident-retro-2026-q3",
+        snippet: "Root cause, timeline, and three remediation items agreed in the Q3 retro.",
+        score: 0.9,
+      },
+    ],
+    at: "2026-06-05T11:00:05.400Z",
+  },
+  {
+    type: "action_proposed",
+    stepId: "c2",
+    action: {
+      kind: "write_record",
+      payload: { collection: "retros", title: "Q3 Incident Retro", visibility: "internal" },
+      justification: "Persist the retro summary so the on-call team can reuse it.",
+      provenance: [
+        {
+          sourceId: "doc:incident-retro-2026-q3",
+          snippet: "Root cause, timeline, and three remediation items agreed in the Q3 retro.",
+          score: 0.9,
+        },
+      ],
+      consensus: {
+        votes: [
+          { model: "claude", kind: "write_record", justification: "Record the retro internally." },
+          { model: "gemini", kind: "write_record", justification: "Save an internal summary." },
+          { model: "grok", kind: "write_record", justification: "Log the retro for on-call." },
+        ],
+        agreementRatio: 1,
+        chosenKind: "write_record",
+      },
+    },
+    at: "2026-06-05T11:00:05.500Z",
+  },
+  {
+    type: "gate_decision",
+    stepId: "c2",
+    decision: { decision: "allow", violations: [], evaluatedAt: "2026-06-05T11:00:05.560Z" },
+    at: "2026-06-05T11:00:05.560Z",
+  },
+  { type: "step_started", stepId: "c3", role: "executor", at: "2026-06-05T11:00:05.620Z" },
+  {
+    type: "executed",
+    stepId: "c3",
+    result: "Wrote record retros/q3-incident-retro (rev 1).",
+    at: "2026-06-05T11:00:06.100Z",
+  },
+  {
+    type: "step_completed",
+    stepId: "c3",
+    role: "executor",
+    summary: "Persisted the retro summary to the internal collection.",
+    provenance: [],
+    at: "2026-06-05T11:00:06.160Z",
+  },
+  { type: "run_completed", runId: "run_triad_1c0a", at: "2026-06-05T11:00:06.200Z" },
+];
+
+// --- TRIAD CONSENSUS: SPLIT → NEEDS APPROVAL -------------------------------
+// The models disagree on whether to act externally (send_email) or just log it
+// (write_record). The majority kind wins the action, but because they did NOT
+// agree, require-model-consensus routes it to a human instead of executing.
+export const splitRun: readonly TraceEvent[] = [
+  {
+    type: "run_started",
+    runId: "run_split_9d4e",
+    task: "Follow up with the partner about the Q3 renewal.",
+    at: "2026-06-05T12:30:00.000Z",
+  },
+  { type: "step_started", stepId: "x1", role: "researcher", at: "2026-06-05T12:30:00.200Z" },
+  {
+    type: "step_completed",
+    stepId: "x1",
+    role: "researcher",
+    summary: "Found a note asking to follow up — ambiguous whether by email or internal tracking.",
+    provenance: [
+      {
+        sourceId: "note:partner-call-2026-08",
+        snippet: "Partner asked us to follow up on the renewal; unclear if by email or just tracked.",
+        score: 0.8,
+      },
+    ],
+    at: "2026-06-05T12:30:02.400Z",
+  },
+  { type: "step_started", stepId: "x2", role: "reasoner", at: "2026-06-05T12:30:02.480Z" },
+  {
+    type: "step_completed",
+    stepId: "x2",
+    role: "reasoner",
+    summary: "Models split: 2 of 3 chose an internal record, 1 wanted to email the partner.",
+    provenance: [
+      {
+        sourceId: "note:partner-call-2026-08",
+        snippet: "Partner asked us to follow up on the renewal; unclear if by email or just tracked.",
+        score: 0.8,
+      },
+    ],
+    at: "2026-06-05T12:30:05.600Z",
+  },
+  {
+    type: "action_proposed",
+    stepId: "x2",
+    action: {
+      kind: "write_record",
+      payload: { collection: "partner-followups", note: "Logged the Q3 renewal follow-up." },
+      justification: "Log the renewal follow-up internally (the majority choice).",
+      provenance: [
+        {
+          sourceId: "note:partner-call-2026-08",
+          snippet: "Partner asked us to follow up on the renewal; unclear if by email or just tracked.",
+          score: 0.8,
+        },
+      ],
+      consensus: {
+        votes: [
+          { model: "claude", kind: "write_record", justification: "Log the follow-up internally." },
+          { model: "gemini", kind: "send_email", justification: "Email the partner directly." },
+          { model: "grok", kind: "write_record", justification: "Track it internally for now." },
+        ],
+        agreementRatio: 0.67,
+        chosenKind: "write_record",
+      },
+    },
+    at: "2026-06-05T12:30:05.700Z",
+  },
+  {
+    type: "gate_decision",
+    stepId: "x2",
+    decision: {
+      decision: "needs_approval",
+      violations: [
+        {
+          rule: "require-model-consensus",
+          detail:
+            "models disagreed (claude: write_record, gemini: send_email, grok: write_record) — 67% agreement is below the 100% required",
+          severity: "review",
+        },
+      ],
+      evaluatedAt: "2026-06-05T12:30:05.760Z",
+    },
+    at: "2026-06-05T12:30:05.760Z",
+  },
+  {
+    type: "awaiting_approval",
+    stepId: "x2",
+    reason:
+      "require-model-consensus: models disagreed (claude: write_record, gemini: send_email, grok: write_record) — 67% agreement is below the 100% required",
+    at: "2026-06-05T12:30:05.820Z",
+  },
+  { type: "run_completed", runId: "run_split_9d4e", at: "2026-06-05T12:30:05.860Z" },
+];
+
+export type SampleRunId =
+  | "allow"
+  | "block"
+  | "pii"
+  | "approval"
+  | "approved"
+  | "consensus"
+  | "split";
 
 export const sampleRuns: Readonly<Record<SampleRunId, readonly TraceEvent[]>> = {
   allow: allowRun,
@@ -476,6 +667,8 @@ export const sampleRuns: Readonly<Record<SampleRunId, readonly TraceEvent[]>> = 
   pii: piiRun,
   approval: approvalRun,
   approved: approvedRun,
+  consensus: consensusRun,
+  split: splitRun,
 };
 
 // --- serialization + replay ------------------------------------------------

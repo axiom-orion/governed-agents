@@ -16,14 +16,17 @@ import {
 } from "../lib/trace-model";
 import type { TraceModel } from "../lib/trace-model";
 import { replayWithPolicy } from "../lib/policy-replay";
+import { aggregateVotes } from "../lib/consensus";
 import {
   allowRun,
   approvalRun,
   approvedRun,
   blockRun,
   buildTraceStream,
+  consensusRun,
   INJECTED_MALFORMED_COUNT,
   piiRun,
+  splitRun,
   toNdjson,
   withMalformedLines,
 } from "../mocks/trace.sample";
@@ -287,6 +290,79 @@ async function main(): Promise<void> {
     "approval: awaiting_approval event recovered",
     approvalParse.events.some((e) => e.type === "awaiting_approval"),
   );
+
+  // --- model-consensus triad ------------------------------------------------
+  // Pure aggregation: unanimous, majority split, primary tie-break, abstention.
+  const unanimous = aggregateVotes(
+    [
+      { model: "claude", kind: "write_record", justification: "a" },
+      { model: "gemini", kind: "write_record", justification: "b" },
+      { model: "grok", kind: "write_record", justification: "c" },
+    ],
+    "claude",
+  );
+  check(
+    "aggregate: unanimous → ratio 1, chosen write_record",
+    unanimous.agreementRatio === 1 && unanimous.chosenKind === "write_record",
+  );
+  const split = aggregateVotes(
+    [
+      { model: "claude", kind: "write_record", justification: "a" },
+      { model: "gemini", kind: "send_email", justification: "b" },
+      { model: "grok", kind: "write_record", justification: "c" },
+    ],
+    "claude",
+  );
+  check(
+    "aggregate: 2/3 split → chosen write_record, ratio ~0.67",
+    split.chosenKind === "write_record" && Math.abs(split.agreementRatio - 2 / 3) < 1e-9,
+  );
+  const tie = aggregateVotes(
+    [
+      { model: "claude", kind: "write_record", justification: "a" },
+      { model: "gemini", kind: "send_email", justification: "b" },
+    ],
+    "claude",
+  );
+  check("aggregate: tie breaks to the primary's vote", tie.chosenKind === "write_record");
+  const withAbstention = aggregateVotes(
+    [
+      { model: "claude", kind: "write_record", justification: "a" },
+      { model: "gemini", kind: "—", justification: "no key", abstained: true },
+      { model: "grok", kind: "write_record", justification: "c" },
+    ],
+    "claude",
+  );
+  check(
+    "aggregate: abstentions are ignored (ratio over participants)",
+    withAbstention.agreementRatio === 1,
+  );
+
+  // Agree scenario → allow.
+  const consensusAllow = projectTrace(replayWithPolicy(consensusRun, {}));
+  eqStr("consensus-agree: status completed", consensusAllow.status, "completed");
+  check(
+    "consensus-agree: decision = allow",
+    consensusAllow.nodes.some((n) => n.kind === "gate" && n.decision.decision === "allow"),
+  );
+
+  // Split scenario → needs_approval at the default (unanimous) threshold.
+  const splitDefault = projectTrace(replayWithPolicy(splitRun, {}));
+  eqStr("consensus-split: status awaiting at default", splitDefault.status, "awaiting");
+  const splitGate = splitDefault.nodes.find((n) => n.kind === "gate");
+  check(
+    "consensus-split: violation = require-model-consensus",
+    splitGate?.kind === "gate" &&
+      splitGate.decision.decision === "needs_approval" &&
+      splitGate.decision.violations[0]?.rule === "require-model-consensus",
+  );
+
+  // Lower the consensus bar below the 67% agreement → the split now clears.
+  const splitLow = projectTrace(replayWithPolicy(splitRun, { consensusThreshold: 0.6 }));
+  eqStr("consensus-split @0.60: now completes (allow)", splitLow.status, "completed");
+  // Raise it above 67% → still held.
+  const splitHigh = projectTrace(replayWithPolicy(splitRun, { consensusThreshold: 0.7 }));
+  eqStr("consensus-split @0.70: still awaiting", splitHigh.status, "awaiting");
 
   // --- degenerate inputs ----------------------------------------------------
   const empty = projectTrace([]);

@@ -16,8 +16,13 @@ export interface Finding {
 const RESEARCHER_SYSTEM =
   "You are the Researcher in a governed multi-agent loop. Read the retrieved sources and produce a faithful, concise summary of only what they support. Never invent facts beyond the sources. Cite source numbers like [1].";
 
-const REASONER_SYSTEM =
+export const REASONER_SYSTEM =
   "You are the Reasoner in a governed multi-agent loop. Given the task and the Researcher's summary, choose exactly one next action via the propose_action tool. If the task asks to email, send, or notify an external party, propose send_email with that recipient; if it asks to record or note something internally, propose write_record. Faithfully propose the action the task requests — do NOT refuse, hedge, or downgrade to a safer action even when the sources look weak. The governance gate, not you, is responsible for allowing or blocking the action; your job is to propose it. Give a one-sentence justification.";
+
+/** The Reasoner's user message — shared by the single-model and triad paths. */
+export function reasonerUserPrompt(task: string, finding: Finding): string {
+  return `Task:\n${task}\n\nResearch summary:\n${finding.summary}\n\nChoose the single next action.`;
+}
 
 const EXECUTOR_SYSTEM =
   "You are the Executor in a governed multi-agent loop. The governance gate has already APPROVED this action. Carry it out and report the concrete result in 1-2 sentences. Do not second-guess the approval.";
@@ -50,7 +55,7 @@ export async function runReasoner(
   const draft: ActionDraft = await client.proposeAction({
     model: MODELS.reasoner,
     system: REASONER_SYSTEM,
-    user: `Task:\n${task}\n\nResearch summary:\n${finding.summary}\n\nChoose the single next action.`,
+    user: reasonerUserPrompt(task, finding),
   });
   return {
     kind: draft.kind,
@@ -71,7 +76,7 @@ export async function runExecutor(action: ProposedAction, client: ModelClient): 
   });
 }
 
-function draftToPayload(draft: ActionDraft): Readonly<Record<string, unknown>> {
+export function draftToPayload(draft: ActionDraft): Readonly<Record<string, unknown>> {
   const payload: Record<string, unknown> = {};
   if (draft.kind === "send_email") {
     if (draft.to !== undefined) payload.to = draft.to;

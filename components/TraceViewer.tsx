@@ -33,11 +33,16 @@ import type {
   TraceModel,
 } from "@/lib/trace-model";
 import { replayWithPolicy } from "@/lib/policy-replay";
-import { DEFAULT_SEND_THRESHOLD, type Decision } from "@/lib/governance";
+import {
+  DEFAULT_CONSENSUS_THRESHOLD,
+  DEFAULT_SEND_THRESHOLD,
+  type Decision,
+} from "@/lib/governance";
 import { TraceCanvas } from "@/components/TraceCanvas";
 import { ProvenancePanel } from "@/components/panels/ProvenancePanel";
 import { GateDecision } from "@/components/panels/GateDecision";
 import { PoliciesPanel } from "@/components/panels/PoliciesPanel";
+import { ConsensusPanel } from "@/components/panels/ConsensusPanel";
 import { StepDetail } from "@/components/panels/StepDetail";
 import { RawTraceDrawer } from "@/components/RawTraceDrawer";
 
@@ -88,6 +93,18 @@ const SCENARIOS: readonly Scenario[] = [
     label: "Allowed — delete with approval attached",
     outcome: "allow",
     tag: "approval cleared",
+  },
+  {
+    id: "consensus",
+    label: "Allowed — model triad agrees",
+    outcome: "allow",
+    tag: "model consensus",
+  },
+  {
+    id: "split",
+    label: "Needs approval — model triad splits",
+    outcome: "needs_approval",
+    tag: "model consensus",
   },
 ];
 
@@ -140,6 +157,9 @@ export function TraceViewer() {
   // and re-converge on re-run, so the UI can prompt "re-run to apply".
   const [sendThreshold, setSendThreshold] = useState(DEFAULT_SEND_THRESHOLD);
   const [appliedThreshold, setAppliedThreshold] = useState(DEFAULT_SEND_THRESHOLD);
+  const [consensusThreshold, setConsensusThreshold] = useState(DEFAULT_CONSENSUS_THRESHOLD);
+  const [appliedConsensusThreshold, setAppliedConsensusThreshold] =
+    useState(DEFAULT_CONSENSUS_THRESHOLD);
   const toolRef = useRef<HTMLElement>(null);
   // Decision-flip tracking: the last decision recorded per scenario, and the
   // baseline captured at the moment a re-run starts (so we can show BLOCK → ALLOW).
@@ -173,7 +193,10 @@ export function TraceViewer() {
           // The edited policy flows to the real backend, so a Live re-run flips too.
           body: JSON.stringify({
             taskId: scenario.liveTaskId,
-            policy: { externalSendThreshold: appliedThreshold },
+            policy: {
+              externalSendThreshold: appliedThreshold,
+              consensusThreshold: appliedConsensusThreshold,
+            },
           }),
         },
       };
@@ -182,13 +205,14 @@ export function TraceViewer() {
     // so the decision is real (not the fixture's baked-in one) and flips on edit.
     const events = replayWithPolicy(sampleRuns[runId], {
       externalSendThreshold: appliedThreshold,
+      consensusThreshold: appliedConsensusThreshold,
     });
     const ndjson = injectNoise ? withMalformedLines(toNdjson(events)) : toNdjson(events);
     return {
       kind: "stream",
       open: () => buildTraceStream(ndjson, { chunkSize: 256, delayMs: 60 }),
     };
-  }, [started, mode, runId, injectNoise, replayNonce, appliedThreshold]);
+  }, [started, mode, runId, injectNoise, replayNonce, appliedThreshold, appliedConsensusThreshold]);
 
   const { model, events, malformedCount, connection, warmupAttempt, streamError } =
     useTraceStream(source);
@@ -239,6 +263,12 @@ export function TraceViewer() {
     return provenance.length > 0 ? Math.max(...provenance.map((p) => p.score)) : undefined;
   }, [gatedAction]);
 
+  // Consensus from the gated action (present on triad runs + the recorded scenarios).
+  const gatedConsensus = gatedAction?.consensus;
+  const consensusApplies =
+    (gatedConsensus?.votes.filter((v) => v.abstained !== true).length ?? 0) >= 2;
+  const currentAgreement = gatedConsensus?.agreementRatio;
+
   // Record the decision for this scenario so the next re-run can compare against it.
   useEffect(() => {
     if (currentDecision) lastDecisionRef.current[keyOf(mode, runId)] = currentDecision;
@@ -251,15 +281,24 @@ export function TraceViewer() {
     return null;
   }, [currentDecision]);
 
-  const dirty = Math.abs(sendThreshold - appliedThreshold) > 1e-9;
+  const dirty =
+    Math.abs(sendThreshold - appliedThreshold) > 1e-9 ||
+    Math.abs(consensusThreshold - appliedConsensusThreshold) > 1e-9;
 
   // Start a run, snapshotting the scenario's previous decision as the flip baseline.
-  const startRun = (nextMode: DataMode, id: SampleRunId, threshold: number): void => {
+  const startRun = (
+    nextMode: DataMode,
+    id: SampleRunId,
+    sendT: number,
+    consT: number,
+  ): void => {
     baselineRef.current = lastDecisionRef.current[keyOf(nextMode, id)];
     setMode(nextMode);
     setRunId(id);
-    setSendThreshold(threshold);
-    setAppliedThreshold(threshold);
+    setSendThreshold(sendT);
+    setAppliedThreshold(sendT);
+    setConsensusThreshold(consT);
+    setAppliedConsensusThreshold(consT);
     setStarted(true);
     setReplayNonce((n) => n + 1);
   };
@@ -272,23 +311,33 @@ export function TraceViewer() {
 
   // Run the selected scenario in the current mode.
   const runScenario = (id: SampleRunId): void => {
-    startRun(mode, id, appliedThreshold); // keep the active policy
+    startRun(mode, id, appliedThreshold, appliedConsensusThreshold); // keep the active policy
     setGuided(false); // manual runs drop into the raw tool
   };
 
-  // Apply the edited threshold and re-run the current scenario.
-  const applyPolicyAndRerun = (threshold: number): void => {
+  // Apply the edited thresholds and re-run the current scenario.
+  const rerunWithPolicy = (): void => {
     baselineRef.current = lastDecisionRef.current[keyOf(mode, runId)];
-    setSendThreshold(threshold);
-    setAppliedThreshold(threshold);
+    setAppliedThreshold(sendThreshold);
+    setAppliedConsensusThreshold(consensusThreshold);
     setStarted(true);
     setReplayNonce((n) => n + 1);
   };
 
-  // Hero CTA: Sample + the blocked task at the DEFAULT threshold (so it really
+  const resetPolicy = (): void => {
+    baselineRef.current = lastDecisionRef.current[keyOf(mode, runId)];
+    setSendThreshold(DEFAULT_SEND_THRESHOLD);
+    setAppliedThreshold(DEFAULT_SEND_THRESHOLD);
+    setConsensusThreshold(DEFAULT_CONSENSUS_THRESHOLD);
+    setAppliedConsensusThreshold(DEFAULT_CONSENSUS_THRESHOLD);
+    setStarted(true);
+    setReplayNonce((n) => n + 1);
+  };
+
+  // Hero CTA: Sample + the blocked task at the DEFAULT thresholds (so it really
   // blocks), guided narration on, then bring the tool into view.
   const watchBlocked = (): void => {
-    startRun("sample", "block", DEFAULT_SEND_THRESHOLD);
+    startRun("sample", "block", DEFAULT_SEND_THRESHOLD, DEFAULT_CONSENSUS_THRESHOLD);
     setGuided(true);
     scrollToTool();
   };
@@ -505,6 +554,15 @@ export function TraceViewer() {
               <StepDetail selectedNode={selectedNode} step={detailStep} />
               <div className="border-t border-slate-100" />
               <GateDecision gate={gate} />
+              {gatedConsensus ? (
+                <>
+                  <div className="border-t border-slate-100" />
+                  <ConsensusPanel
+                    consensus={gatedConsensus}
+                    threshold={appliedConsensusThreshold}
+                  />
+                </>
+              ) : null}
               <div className="border-t border-slate-100" />
               <ProvenancePanel
                 sources={sources}
@@ -517,10 +575,15 @@ export function TraceViewer() {
                 threshold={sendThreshold}
                 appliedThreshold={appliedThreshold}
                 defaultThreshold={DEFAULT_SEND_THRESHOLD}
+                consensusThreshold={consensusThreshold}
+                defaultConsensusThreshold={DEFAULT_CONSENSUS_THRESHOLD}
+                onConsensusChange={setConsensusThreshold}
+                consensusApplies={consensusApplies}
+                currentAgreement={currentAgreement}
                 dirty={dirty}
                 onThresholdChange={setSendThreshold}
-                onRerun={() => applyPolicyAndRerun(sendThreshold)}
-                onReset={() => applyPolicyAndRerun(DEFAULT_SEND_THRESHOLD)}
+                onRerun={rerunWithPolicy}
+                onReset={resetPolicy}
                 flip={flip}
                 sendRuleApplies={sendRuleApplies}
                 bestSendScore={bestSendScore}

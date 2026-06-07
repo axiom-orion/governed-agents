@@ -119,15 +119,30 @@ Thresholds are explicit:
 | `no-unverified-external-send` | outbound `send_email` | **block** unless some source ≥ the confidence threshold (default **0.70**) |
 | `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data (SSN / card / phone) |
 | `destructive-action-needs-approval` | `delete_record` / destructive kinds | **needs-approval** unless an approval token is attached |
+| `require-model-consensus` | multi-model (triad) runs | **needs-approval** when model agreement falls below the threshold (default **100%**, unanimous) |
 
 The third state (`needs_approval`) models human-in-the-loop: the run parks at an
 **Awaiting approval** node instead of executing or hard-failing.
 
+### Model consensus (the triad)
+
+The Reasoner step can be decided by a **triad of models** — Claude (`@anthropic-ai/sdk`)
+plus Gemini and Grok via guarded `fetch` (`lib/providers.ts`), behind one
+`ActionProposer` seam. `lib/consensus.ts` runs the available models in parallel,
+records each one's vote, and attaches a `consensus` (`{ votes, agreementRatio,
+chosenKind }`) to the proposed action; `aggregateVotes` is pure and ties break
+toward the primary. A provider with no key — or a failed call — **abstains** rather
+than failing the run, so the triad degrades gracefully to a single model (the
+offline/CI path stays deterministic with one voter). The `require-model-consensus`
+rule then holds a split decision for a human, with the agreement threshold editable
+from the UI just like the send-confidence one (`consensusThreshold`).
+
 ### Editable policy (the threshold is real, not cosmetic)
 
-`buildPolicy({ externalSendThreshold })` assembles the rule set with a tunable
-confidence threshold via `makeNoUnverifiedExternalSend(threshold)`. The UI's
-Policies panel edits that threshold and re-runs:
+`buildPolicy({ externalSendThreshold, consensusThreshold })` assembles the rule set
+with tunable thresholds (via `makeNoUnverifiedExternalSend` and
+`makeRequireModelConsensus`). The UI's Policies panel edits either threshold and
+re-runs:
 
 - **Live** — the threshold is sent in the request body and `runLoop` evaluates the
   real gate with it.
