@@ -167,14 +167,12 @@ export interface Voter {
 }
 
 /**
- * The voters for the Reasoner step: always the primary (Claude/offline), plus
- * Gemini and Grok when their keys are present. Offline/CI keeps a single voter so
- * the deterministic demo is unchanged; the triad activates only with real keys.
+ * The extra (non-primary) voters that have an API key configured — Gemini and/or
+ * Grok. Unlike {@link createReasonerVoters} this ignores AGENTS_OFFLINE, so the
+ * provider-check script can probe them directly.
  */
-export function createReasonerVoters(primary: ModelClient): Voter[] {
-  const voters: Voter[] = [{ proposer: primary, model: MODELS.reasoner }];
-  if (isOffline()) return voters;
-
+export function createExtraVoters(): Voter[] {
+  const voters: Voter[] = [];
   const geminiKey = process.env.GEMINI_API_KEY?.trim();
   if (geminiKey !== undefined && geminiKey.length > 0) {
     voters.push({ proposer: new GeminiActionProposer(geminiKey), model: TRIAD_MODELS.gemini });
@@ -184,4 +182,15 @@ export function createReasonerVoters(primary: ModelClient): Voter[] {
     voters.push({ proposer: new GrokActionProposer(xaiKey), model: TRIAD_MODELS.grok });
   }
   return voters;
+}
+
+/**
+ * The voters for the Reasoner step: always the primary (Claude/offline), plus
+ * Gemini and Grok when their keys are present. Offline/CI keeps a single voter so
+ * the deterministic demo is unchanged; the triad activates only with real keys.
+ */
+export function createReasonerVoters(primary: ModelClient): Voter[] {
+  const voters: Voter[] = [{ proposer: primary, model: MODELS.reasoner }];
+  if (isOffline()) return voters;
+  return [...voters, ...createExtraVoters()];
 }
