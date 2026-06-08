@@ -82,11 +82,22 @@ beats a **review** request beats **allow**:
 | `no-unverified-external-send` | outbound `send_email` | **block** unless some source ≥ the confidence threshold (default **0.70**, editable in the UI) |
 | `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data (SSN / card / phone) |
 | `destructive-action-needs-approval` | `delete_record` / destructive kinds | **needs-approval** unless an approval token is attached |
+| `require-model-consensus` | multi-model (triad) runs | **needs-approval** when model agreement falls below the threshold (default unanimous) |
 
-The threshold is genuinely editable: it flows to the **Live** backend in the request
-body, and the **Sample** replay **recomputes** the gate
+The thresholds are genuinely editable: they flow to the **Live** backend in the
+request body, and the **Sample** replay **recomputes** the gate
 ([`lib/policy-replay.ts`](lib/policy-replay.ts)) rather than replaying a baked-in
 decision — so the flip is real on both paths.
+
+### Model consensus (the triad)
+
+The Reasoner step can be decided by a **triad** — Claude + Gemini + Grok — voting on
+the action ([`lib/consensus.ts`](lib/consensus.ts), [`lib/providers.ts`](lib/providers.ts)).
+Each model proposes independently; if they don't agree, `require-model-consensus`
+holds the run for a human instead of acting on a split decision. A provider with no
+key simply **abstains**, so it degrades gracefully to a single model. Set
+`GEMINI_API_KEY` + `XAI_API_KEY` to light up Live; the *“model triad agrees / splits”*
+Sample scenarios demo it with zero keys.
 
 ## Quickstart
 
@@ -111,7 +122,8 @@ Models (override via env): Researcher `claude-haiku-4-5`, Reasoner
 
 Next.js 15 (App Router) · React 19 · TypeScript (strict, `noUncheckedIndexedAccess`,
 no `any`) · Tailwind CSS · React Flow (`@xyflow/react`) · `@anthropic-ai/sdk`
-(server-side) · deployed on Vercel.
+server-side, with Gemini + Grok over guarded REST for the consensus triad · deployed
+on Vercel.
 
 ## Design decisions & tradeoffs
 

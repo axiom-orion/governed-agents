@@ -33,10 +33,14 @@ export interface ProposeInput {
   readonly model: string;
 }
 
-export interface ModelClient {
+/** Anything that can propose a structured action — the unit the triad votes with. */
+export interface ActionProposer {
   readonly label: string;
-  complete(input: CompleteInput): Promise<string>;
   proposeAction(input: ProposeInput): Promise<ActionDraft>;
+}
+
+export interface ModelClient extends ActionProposer {
+  complete(input: CompleteInput): Promise<string>;
 }
 
 /**
@@ -84,7 +88,7 @@ function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function parseActionDraft(input: unknown): ActionDraft {
+export function parseActionDraft(input: unknown): ActionDraft {
   if (typeof input !== "object" || input === null) {
     throw new Error("propose_action returned a non-object input");
   }

@@ -11,6 +11,8 @@
 import type { TraceEvent } from "./trace-events";
 import type {
   AgentRole,
+  Consensus,
+  ModelVote,
   Provenance,
   PolicyViolation,
   PolicyDecision,
@@ -60,13 +62,28 @@ function isPolicyDecision(x: unknown): x is PolicyDecision {
   );
 }
 
+function isModelVote(x: unknown): x is ModelVote {
+  return isRecord(x) && isString(x.model) && isString(x.kind) && isString(x.justification);
+}
+
+function isConsensus(x: unknown): x is Consensus {
+  return (
+    isRecord(x) &&
+    Array.isArray(x.votes) &&
+    x.votes.every(isModelVote) &&
+    isFiniteNumber(x.agreementRatio) &&
+    isString(x.chosenKind)
+  );
+}
+
 function isProposedAction(x: unknown): x is ProposedAction {
   return (
     isRecord(x) &&
     isString(x.kind) &&
     isRecord(x.payload) &&
     isString(x.justification) &&
-    isProvenanceArray(x.provenance)
+    isProvenanceArray(x.provenance) &&
+    (x.consensus === undefined || isConsensus(x.consensus))
   );
 }
 

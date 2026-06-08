@@ -18,13 +18,14 @@ export const maxDuration = 60;
 interface RunRequest {
   readonly task?: string;
   readonly taskId?: string;
-  /** Optional gate override so an edited policy flips a real Live run, not just Sample. */
+  /** Optional gate overrides so an edited policy flips a real Live run, not just Sample. */
   readonly externalSendThreshold?: number;
+  readonly consensusThreshold?: number;
 }
 
-function readThreshold(policy: unknown): number | undefined {
+function readNumber(policy: unknown, key: string): number | undefined {
   if (typeof policy !== "object" || policy === null) return undefined;
-  const value = (policy as Record<string, unknown>).externalSendThreshold;
+  const value = (policy as Record<string, unknown>)[key];
   return typeof value === "number" && Number.isFinite(value)
     ? Math.min(1, Math.max(0, value))
     : undefined;
@@ -36,7 +37,8 @@ function readRunRequest(body: unknown): RunRequest {
   return {
     task: typeof rec.task === "string" ? rec.task : undefined,
     taskId: typeof rec.taskId === "string" ? rec.taskId : undefined,
-    externalSendThreshold: readThreshold(rec.policy),
+    externalSendThreshold: readNumber(rec.policy, "externalSendThreshold"),
+    consensusThreshold: readNumber(rec.policy, "consensusThreshold"),
   };
 }
 
@@ -55,7 +57,7 @@ export async function POST(req: Request): Promise<Response> {
   } catch {
     // empty / non-JSON body is allowed; fall through to validation
   }
-  const { task, taskId, externalSendThreshold } = readRunRequest(parsed);
+  const { task, taskId, externalSendThreshold, consensusThreshold } = readRunRequest(parsed);
 
   let resolvedTask = task;
   if (resolvedTask === undefined && taskId !== undefined) {
@@ -76,7 +78,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const taskText = resolvedTask;
-  const policy = buildPolicy({ externalSendThreshold });
+  const policy = buildPolicy({ externalSendThreshold, consensusThreshold });
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {

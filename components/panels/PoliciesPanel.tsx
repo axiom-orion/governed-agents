@@ -33,6 +33,11 @@ export function PoliciesPanel({
   threshold,
   appliedThreshold,
   defaultThreshold,
+  consensusThreshold,
+  defaultConsensusThreshold,
+  onConsensusChange,
+  consensusApplies,
+  currentAgreement,
   dirty,
   onThresholdChange,
   onRerun,
@@ -44,6 +49,11 @@ export function PoliciesPanel({
   threshold: number;
   appliedThreshold: number;
   defaultThreshold: number;
+  consensusThreshold: number;
+  defaultConsensusThreshold: number;
+  onConsensusChange: (n: number) => void;
+  consensusApplies: boolean;
+  currentAgreement?: number;
   dirty: boolean;
   onThresholdChange: (n: number) => void;
   onRerun: () => void;
@@ -52,8 +62,11 @@ export function PoliciesPanel({
   sendRuleApplies: boolean;
   bestSendScore?: number;
 }) {
-  const isDefault = Math.abs(threshold - defaultThreshold) < 1e-9;
+  const isDefault =
+    Math.abs(threshold - defaultThreshold) < 1e-9 &&
+    Math.abs(consensusThreshold - defaultConsensusThreshold) < 1e-9;
   const fmt = (n: number): string => n.toFixed(2);
+  const pct = (n: number): string => `${Math.round(n * 100)}%`;
 
   return (
     <section aria-label="Policies" className="flex flex-col">
@@ -150,6 +163,61 @@ export function PoliciesPanel({
             </p>
           )}
         </li>
+
+        {/* require-model-consensus — editable agreement threshold (the triad) */}
+        <li className="rounded-md border border-slate-200 bg-white p-3">
+          <div className="flex items-center justify-between gap-2">
+            <code className="font-mono text-xs font-semibold text-slate-700">
+              require-model-consensus
+            </code>
+            <span className="font-mono text-xs tabular-nums text-slate-500">
+              ≥ {pct(consensusThreshold)}
+            </span>
+          </div>
+          <p className="mt-1 text-sm leading-snug text-slate-600">
+            The model triad must reach <span className="font-medium">≥ {pct(consensusThreshold)}</span>{" "}
+            agreement on the action, or it&rsquo;s held for human approval.
+          </p>
+
+          <div className="mt-2.5 flex items-center gap-3">
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={consensusThreshold}
+              onChange={(e) => onConsensusChange(Number(e.target.value))}
+              aria-label="Agreement threshold for require-model-consensus"
+              className="h-1.5 flex-1 cursor-pointer accent-blue-600"
+            />
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={consensusThreshold}
+              onChange={(e) => onConsensusChange(Number(e.target.value))}
+              aria-label="Agreement threshold (numeric)"
+              className="w-16 rounded border border-slate-300 px-1.5 py-1 text-right font-mono text-xs tabular-nums text-slate-700"
+            />
+          </div>
+
+          {consensusApplies && currentAgreement !== undefined ? (
+            <p className="mt-2 text-xs text-slate-500">
+              The triad agrees{" "}
+              <span className="font-semibold text-amber-700">{pct(currentAgreement)}</span>. Set the
+              bar at or below {pct(currentAgreement)} and re-run to{" "}
+              <span className="font-medium text-emerald-700">allow</span> it; above to{" "}
+              <span className="font-medium text-amber-700">hold for approval</span>.
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-slate-400">
+              Only affects multi-model runs — the triad scenarios, or Live once{" "}
+              <code className="font-mono">GEMINI_API_KEY</code> +{" "}
+              <code className="font-mono">XAI_API_KEY</code> are set.
+            </p>
+          )}
+        </li>
       </ul>
 
       <div className="mt-3 flex items-center gap-2">
@@ -173,9 +241,7 @@ export function PoliciesPanel({
         </button>
       </div>
       {dirty ? (
-        <p className="mt-1.5 text-xs text-amber-700">
-          Threshold edited to {fmt(threshold)} — re-run to apply (active: {fmt(appliedThreshold)}).
-        </p>
+        <p className="mt-1.5 text-xs text-amber-700">Policy edited — re-run to apply.</p>
       ) : null}
     </section>
   );
