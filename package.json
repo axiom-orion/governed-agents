@@ -9,6 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "check:model": "tsx scripts/check-model.ts",
+    "check:providers": "tsx scripts/check-providers.ts",
     "demo": "tsx scripts/run.ts",
     "demo:allow": "tsx scripts/run.ts allowed",
     "demo:block": "tsx scripts/run.ts blocked"

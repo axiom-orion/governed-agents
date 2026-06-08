@@ -99,6 +99,12 @@ key simply **abstains**, so it degrades gracefully to a single model. Set
 `GEMINI_API_KEY` + `XAI_API_KEY` to light up Live; the *“model triad agrees / splits”*
 Sample scenarios demo it with zero keys.
 
+Verify your keys + model ids from the terminal before deploying:
+
+```bash
+npm run check:providers   # pings each configured provider, prints ✓/✗ per model
+```
+
 ## Quickstart
 
 ```bash
