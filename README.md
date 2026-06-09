@@ -191,16 +191,19 @@ examples/governed-trader/  the same gate on a trade — the canonical irreversib
 [`examples/governed-trader`](examples/governed-trader) points this repo's idea — a typed
 pre-execution gate with named rules and a streamed NDJSON trace — at a **trade**, the
 canonical irreversible, real-money action. Same loop shape (propose → gate →
-execute/hold/block), zero dependencies, CPU-only, on **frozen real** crypto data; no
-orders are ever placed. It makes two hand-waved claims measurable: governance (the
-*only* variable is the gate — ungoverned breaches a hard risk limit on 29 decisions, the
-governed run on **0**) and honesty (a backtest auditor that **refuses to attest** a
-lookahead/zero-cost number). Run it from that directory:
+execute/hold/block), zero dependencies, CPU-only, on **frozen real** data across two
+asset classes — 24/7 crypto and calendar-bound US equities/ETFs (with cash dividends,
+opening-gap circuit-breakers, and FINRA-style rules); no orders are ever placed. It makes
+two hand-waved claims measurable: governance (the *only* variable is the gate — an
+ungoverned order stream breaches hard rules on 16 crypto / 120 equity decisions, the
+governed runs on **0**) and honesty (a backtest auditor that isolates four lies —
+lookahead, zero-cost, hindsight universe, ignored dividends — and **refuses to attest**
+each). Run it from that directory:
 
 ```sh
 cd examples/governed-trader
-npm test               # gate · conductor · audit self-tests (28 assertions)
-node eval/run_eval.js  # reproduce both claims
+npm test               # gate · conductor · audit · equities self-tests (61 assertions)
+node eval/run_eval.js  # reproduce the claims on both asset classes
 ```
 
 ## Composed in production

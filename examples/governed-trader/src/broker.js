@@ -17,11 +17,19 @@
     const slipBps = opts.slipBps != null ? opts.slipBps : 5; // slippage, basis points
     let cash = opts.cash != null ? opts.cash : 100000;
     const positions = {};
-    let fees = 0, slippagePaid = 0;
+    let fees = 0, slippagePaid = 0, divs = 0;
     return {
       cash: function () { return cash; },
       positions: function () { return Object.assign({}, positions); },
       fees: function () { return fees; },
+      divs: function () { return divs; },
+      // cash dividend on the ex-date: longs are paid, shorts pay (sign falls out of the position).
+      dividend: function (instrument, perShare) {
+        const amt = (positions[instrument] || 0) * perShare;
+        if (!amt) return 0;
+        cash += amt; divs += amt;
+        return amt;
+      },
       grossNotional: function (prices) { let g = 0; Object.keys(positions).forEach(function (i) { g += Math.abs(positions[i] * (prices[i] || 0)); }); return g; },
       equity: function (prices) { let v = cash; Object.keys(positions).forEach(function (i) { v += positions[i] * (prices[i] || 0); }); return v; },
       // execute a fill at order.price, applying slippage (pay up to buy, sell lower) + fee.

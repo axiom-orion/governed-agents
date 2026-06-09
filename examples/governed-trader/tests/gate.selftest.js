@@ -24,6 +24,17 @@ ok('over gross leverage -> block', has(GATE.evaluatePolicy(clean, Object.assign(
 ok('past the daily-loss halt + risk-increasing -> block', has(GATE.evaluatePolicy(clean, Object.assign({}, ctx, { dayPnl: -6000 }), policy), 'daily-loss-breaker'));
 ok('single-source order above the floor -> needs_approval (review)', GATE.evaluatePolicy({ instrument: 'BTC_USDT', side: 'buy', qty: 1, price: 60000, confidence: 0.9, provenance: [{ sourceId: 'ta:sma-cross' }] }, ctx, GATE.buildPolicy({ maxOrderNotional: 1e9, maxPositionPct: 1, corroborationMinNotional: 30000 })).decision === 'needs_approval');
 
+/* reduce-only exemption: size + conviction caps gate NEW risk only — a book must
+   always be allowed to trade toward flat, else its own caps trap it over a limit. */
+const longCtx = Object.assign({}, ctx, { positions: { BTC_USDT: 1.0 }, grossNotional: 60000 });
+const exit = { instrument: 'BTC_USDT', side: 'sell', qty: 1.0, price: 60000, confidence: 0.1, dataAgeSec: 0, provenance: [{ sourceId: 'ta:sma-cross', score: 0.1 }] };
+ok('a $60k EXIT passes the $25k order cap, the leverage cap, and the conviction floor (reduce-only exemption)',
+  GATE.evaluatePolicy(exit, longCtx, policy).decision === 'allow');
+ok('...but the same $60k order as a fresh ENTRY is blocked by all three',
+  (function () { const d = GATE.evaluatePolicy(Object.assign({}, exit, { side: 'buy' }), longCtx, policy); return has(d, 'max-order-notional') && has(d, 'max-gross-leverage') && has(d, 'min-confidence'); })());
+ok('sanity rules still apply to a reducing order (stale data blocks the exit too)',
+  has(GATE.evaluatePolicy(Object.assign({}, exit, { dataAgeSec: 600 }), longCtx, policy), 'stale-data'));
+
 /* the signature demo: edit a threshold and the same order flips */
 const o = Object.assign({}, clean, { qty: 0.1 }); // $6,000
 ok('$6k order BLOCKED at a $5k cap', GATE.evaluatePolicy(o, ctx, GATE.buildPolicy({ maxOrderNotional: 5000 })).decision === 'block');

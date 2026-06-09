@@ -41,13 +41,31 @@
     const hist = {};            // instrument -> point-in-time closes
     const future = {};          // instrument -> full closes (only used if lookahead)
     data.SERIES.forEach(function (s) { future[s.instrument] = s.closes; hist[s.instrument] = []; });
-    const lastPrice = {};
+    const lastPrice = {}, prevClose = {};
     let curDate = null, dayStartEquity = broker.cash(), worstDayLossPct = 0;
-    let breaches = 0, blocked = 0, held = 0, fills = 0, step = 0;
+    let breaches = 0, blocked = 0, held = 0, fills = 0, step = 0, divsCredited = 0;
+
+    // asset-class plumbing: equities are long-only here (no borrow/locate modeled),
+    // carry a trading calendar (the data's own dates), and pay cash dividends on the
+    // ex-date to holders as of the prior close. Crypto datasets have none of these.
+    const assetClass = opts.assetClass || data.assetClass || 'crypto';
+    const longOnly = opts.longOnly != null ? opts.longOnly : assetClass === 'equity';
+    const creditDividends = opts.creditDividends !== false;
+    const divByBar = {};        // 'date|instrument' -> per-share cash amount
+    Object.keys(data.DIVIDENDS || {}).forEach(function (ins) { data.DIVIDENDS[ins].forEach(function (d) { divByBar[d.ex + '|' + ins] = d.amount; }); });
+    const tradingDays = new Set(bars.map(function (b) { return b.t; }));
+    const ruleHits = {};        // which named rules did the work (blocked or breached orders)
+    function tally(decision) { (decision.violations || []).forEach(function (v) { if ((v.severity || 'block') === 'block') ruleHits[v.rule] = (ruleHits[v.rule] || 0) + 1; }); }
 
     bars.forEach(function (bar) {
       lastPrice[bar.instrument] = bar.close;
       if (bar.t !== curDate) { curDate = bar.t; dayStartEquity = broker.equity(lastPrice); }
+      // ex-date dividend: paid on the PRIOR close's position, before any decision on this bar
+      const div = creditDividends ? divByBar[bar.t + '|' + bar.instrument] : null;
+      if (div != null) divsCredited += broker.dividend(bar.instrument, div);
+      // realized opening gap vs the prior close — information that is already public at decision time
+      const gapPct = (bar.open != null && prevClose[bar.instrument] != null) ? Math.abs(bar.open / prevClose[bar.instrument] - 1) : null;
+      prevClose[bar.instrument] = bar.close;
       hist[bar.instrument].push(bar.close);
 
       // signal (point-in-time, unless the dishonest lookahead variant peeks at the next close)
@@ -55,18 +73,24 @@
         ? hist[bar.instrument].concat([future[bar.instrument][bar.i + 1]]) : hist[bar.instrument];
       const sig = STRAT.signal(closes, opts.stratCfg);
       const equity = broker.equity(lastPrice);
-      const targetNotional = sig.side === 'flat' ? 0 : (sig.side === 'sell' ? -1 : 1) * targetPct * equity * sig.confidence;
+      let targetNotional = sig.side === 'flat' ? 0 : (sig.side === 'sell' ? -1 : 1) * targetPct * equity * sig.confidence;
+      if (longOnly && targetNotional < 0) targetNotional = 0; // a sell signal means exit-to-flat, never short
       const targetQty = bar.close ? targetNotional / bar.close : 0;
       const curQty = (broker.positions()[bar.instrument]) || 0;
       const deltaQty = targetQty - curQty;
       if (Math.abs(deltaQty * bar.close) < 50) return; // ignore dust
+      // no-trade band: rebalance only when the drift is worth trading (turnover control).
+      // Default 0 — the band off — so existing crypto runs are bit-identical.
+      const band = opts.rebalanceBandPct || 0;
+      if (band && Math.abs(deltaQty * bar.close) < band * equity && Math.abs(targetQty * bar.close) > 1) return;
 
       const order = {
         instrument: bar.instrument, side: deltaQty >= 0 ? 'buy' : 'sell', qty: Math.abs(deltaQty),
         price: bar.close, notional: Math.abs(deltaQty * bar.close), confidence: sig.confidence,
         provenance: sig.provenance, dataAgeSec: opts.dataAgeSec || 0,
+        t: bar.t, assetClass: assetClass, gapPct: gapPct,
       };
-      const ctx = { equity: equity, positions: broker.positions(), grossNotional: broker.grossNotional(lastPrice), dayPnl: equity - dayStartEquity, dayStartEquity: dayStartEquity, refPrice: bar.close };
+      const ctx = { equity: equity, positions: broker.positions(), grossNotional: broker.grossNotional(lastPrice), dayPnl: equity - dayStartEquity, dayStartEquity: dayStartEquity, refPrice: bar.close, tradingDays: tradingDays };
       const decision = GATE.evaluatePolicy(order, ctx, policy);
       const sid = (trace ? trace.runId : 'r') + ':s' + (++step);
       if (trace) { trace.actionProposed(sid, order); trace.gateDecision(sid, decision); }
@@ -75,10 +99,10 @@
       if (enforce) {
         if (decision.decision === 'allow') doFill = true;
         else if (decision.decision === 'needs_approval') { held++; if (trace) trace.awaitingApproval(sid, GATE.reasonOf(decision, 'review')); }
-        else { blocked++; if (trace) trace.halted(sid, GATE.reasonOf(decision)); }
+        else { blocked++; tally(decision); if (trace) trace.halted(sid, GATE.reasonOf(decision)); }
       } else {
-        doFill = true;                            // ungoverned: execute regardless
-        if (hardViolation(decision)) breaches++;  // ...and a violating fill is a breach
+        doFill = true;                                              // ungoverned: execute regardless
+        if (hardViolation(decision)) { breaches++; tally(decision); } // ...and a violating fill is a breach
       }
       if (doFill) { broker.fill(order); fills++; if (trace) trace.executed(sid, order.side + ' ' + order.qty.toFixed(4) + ' ' + order.instrument); }
 
@@ -90,11 +114,14 @@
     const finalEquity = broker.equity(lastPrice);
     return {
       mode: enforce ? 'governed' : 'ungoverned',
+      assetClass: assetClass,
       finalEquity: +finalEquity.toFixed(2),
       returnPct: +(((finalEquity / (opts.cash || 100000)) - 1) * 100).toFixed(2),
-      breaches: breaches, blocked: blocked, held: held, fills: fills,
+      breaches: breaches, blocked: blocked, held: held, fills: fills, bars: bars.length,
       worstDayLossPct: +(worstDayLossPct * 100).toFixed(2),
       fees: +broker.fees().toFixed(2),
+      divs: +divsCredited.toFixed(2),
+      ruleHits: ruleHits,
       trace: trace,
     };
   }

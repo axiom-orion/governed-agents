@@ -16,7 +16,9 @@ ok('governed breaches ZERO (pre-execution)', gov.breaches === 0);
 ok('governed still trades (it is not just blocking everything)', gov.fills > 0);
 ok('governed caps the worst day at the loss breaker', gov.worstDayLossPct >= -(cfg.maxDailyLossPct * 100));
 ok('governed blocked the reckless orders', gov.blocked > 0);
-ok('the only variable is the gate — both ran the same number of decisions', (gov.fills + gov.blocked + gov.held) >= ung.fills);
+// the books may legitimately diverge after the first blocked order (a block changes
+// positions, which changes later proposals) — the controlled invariant is the TAPE.
+ok('the only variable is the gate — both runs walked the identical tape', gov.bars === ung.bars && gov.bars > 0);
 console.log('  · governed: ' + gov.returnPct + '% net, ' + gov.blocked + ' blocked, worst day ' + gov.worstDayLossPct + '%');
 console.log('  · ungoverned: ' + ung.returnPct + '% net, ' + ung.breaches + ' breaches, worst day ' + ung.worstDayLossPct + '%');
 
