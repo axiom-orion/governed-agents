@@ -183,6 +183,24 @@ components/            React Flow canvas + hero + guided walkthrough + audit pan
 mocks/trace.sample.ts  recorded runs for the instant Sample mode
 scripts/verify-trace.ts headless contract test (CI)
 docs/ARCHITECTURE.md   data flow + full event schema
+examples/governed-trader/  the same gate on a trade — the canonical irreversible action
+```
+
+## Example — the gate on the action that matters most
+
+[`examples/governed-trader`](examples/governed-trader) points this repo's idea — a typed
+pre-execution gate with named rules and a streamed NDJSON trace — at a **trade**, the
+canonical irreversible, real-money action. Same loop shape (propose → gate →
+execute/hold/block), zero dependencies, CPU-only, on **frozen real** crypto data; no
+orders are ever placed. It makes two hand-waved claims measurable: governance (the
+*only* variable is the gate — ungoverned breaches a hard risk limit on 29 decisions, the
+governed run on **0**) and honesty (a backtest auditor that **refuses to attest** a
+lookahead/zero-cost number). Run it from that directory:
+
+```sh
+cd examples/governed-trader
+npm test               # gate · conductor · audit self-tests (28 assertions)
+node eval/run_eval.js  # reproduce both claims
 ```
 
 ## Composed in production

@@ -1,0 +1,14 @@
+{
+  "name": "governed-trader",
+  "version": "0.1.0",
+  "private": false,
+  "description": "A governed paper-trading agent: a trade is the canonical irreversible action, so the policy gate is the point. Ungoverned breaches risk limits; governed breaches 0 at ~zero return cost. Eval on real, frozen crypto data. No real money, ever.",
+  "scripts": {
+    "eval": "node eval/run_eval.js",
+    "test": "node tests/gate.selftest.js && node tests/conductor.selftest.js && node tests/audit.selftest.js",
+    "test:gate": "node tests/gate.selftest.js",
+    "test:conductor": "node tests/conductor.selftest.js",
+    "test:audit": "node tests/audit.selftest.js"
+  },
+  "license": "MIT"
+}
