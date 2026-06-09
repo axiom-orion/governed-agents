@@ -40,3 +40,25 @@ jobs:
           # Force the deterministic offline stub: no API key in CI, and the run must
           # not depend on one. Asserts allowed→allow and blocked→block.
           AGENTS_OFFLINE: "1"
+
+  governed-trader-example:
+    # The examples/governed-trader package applies this repo's gate to the canonical
+    # irreversible action — a trade. Zero-dependency, CPU-only Node: no install, no
+    # network, no API key. Gated here so the example provably stays green.
+    name: example · governed-trader (self-tests + eval)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/governed-trader
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Self-tests — gate · conductor · audit · equities (66 assertions)
+        run: npm test
+
+      - name: Eval — reproduce the governance + honesty claims on frozen crypto + equities data
+        run: node eval/run_eval.js
