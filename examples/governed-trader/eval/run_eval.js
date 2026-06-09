@@ -40,8 +40,12 @@ console.log('   ' + pad('', 22) + pad('ungoverned', 14) + 'governed');
 console.log('   ' + pad('hard-rule breaches', 22) + pad(ungoverned.breaches, 14) + governed.breaches);
 console.log('   ' + pad('blocked / held', 22) + pad('—', 14) + (governed.blocked + ' / ' + governed.held));
 console.log('   ' + pad('worst single-day', 22) + pad(ungoverned.worstDayLossPct + '%', 14) + governed.worstDayLossPct + '%   (halt: -' + (policyCfg.maxDailyLossPct * 100) + '%)');
+console.log('   ' + pad('max drawdown', 22) + pad(ungoverned.maxDrawdownPct + '%', 14) + governed.maxDrawdownPct + '%');
 console.log('   ' + pad('net return', 22) + pad(ungoverned.returnPct + '%', 14) + governed.returnPct + '%');
-console.log('   rules that did the work: ' + tally(governed.ruleHits) + '\n');
+console.log('   rules that bound on this tape: ' + tally(governed.ruleHits));
+console.log('   => here governance is not just safe but BETTER risk-adjusted: it gave up '
+  + (ungoverned.returnPct - governed.returnPct).toFixed(2) + ' pts of return to cut max drawdown from '
+  + ungoverned.maxDrawdownPct + '% to ' + governed.maxDrawdownPct + '%.\n');
 
 console.log('2) HONESTY, crypto — the same strategy, reported naively vs honestly');
 console.log('   ' + pad('naive (peek + 0 cost)', 28) + honesty.naiveReturnPct + '%');
@@ -60,9 +64,12 @@ console.log('   ' + pad('', 22) + pad('ungoverned', 14) + 'governed');
 console.log('   ' + pad('hard-rule breaches', 22) + pad(eqUn.breaches, 14) + eqGo.breaches);
 console.log('   ' + pad('blocked / held', 22) + pad('—', 14) + (eqGo.blocked + ' / ' + eqGo.held));
 console.log('   ' + pad('worst single-day', 22) + pad(eqUn.worstDayLossPct + '%', 14) + eqGo.worstDayLossPct + '%   (halt: -' + (eqPolicyCfg.maxDailyLossPct * 100) + '%)');
+console.log('   ' + pad('max drawdown', 22) + pad(eqUn.maxDrawdownPct + '%', 14) + eqGo.maxDrawdownPct + '%');
 console.log('   ' + pad('net return', 22) + pad(eqUn.returnPct + '%', 14) + eqGo.returnPct + '%');
 console.log('   ' + pad('dividends credited', 22) + pad('$' + eqUn.divs, 14) + '$' + eqGo.divs);
-console.log('   rules that did the work: ' + tally(eqGo.ruleHits) + '\n');
+console.log('   rules that bound on this tape: ' + tally(eqGo.ruleHits));
+console.log('   => here governance is NOT free: it cost ' + (eqUn.returnPct - eqGo.returnPct).toFixed(2)
+  + ' pts of return and a touch of drawdown on a long-only downtrend. We do not pretend otherwise — what it bought is 120 hard-rule breaches → 0.\n');
 
 console.log('4) HONESTY, US equities — the four lies, isolated on the same tape');
 console.log('   ' + pad('naive (all four lies)', 30) + eqH.naiveReturnPct + '%   (peek + 0 cost + no dividends + hindsight universe: ' + eqH.hindsightUniverse.join(' ') + ')');
@@ -80,3 +87,18 @@ const d = AUDIT.attest({ feeBps: 10, slipBps: 5, dividendsCredited: false, unive
 console.log('   attest(point-in-time, net, dividends credited):  ' + (a.clean ? 'CLEAN' : 'REFUSED'));
 console.log('   attest(lookahead, zero-cost):                    ' + (b.clean ? 'CLEAN' : 'REFUSED — ' + b.reasons.join('; ')));
 console.log('   attest(no dividends, hindsight universe):        ' + (d.clean ? 'CLEAN' : 'REFUSED — ' + d.reasons.join('; ')));
+
+/* the honesty that matters most: be clear about what these numbers do NOT show */
+const allRules = ['require-provenance', 'restricted-symbol', 'stale-data', 'off-market-price', 'min-confidence', 'max-order-notional', 'max-position-pct', 'max-gross-leverage', 'market-closed', 'gap-circuit-breaker', 'pdt-rule', 'daily-loss-breaker', 'require-corroboration', 'live-needs-approval'];
+const bound = {}; Object.keys(governed.ruleHits).forEach(function (k) { bound[k] = 1; }); Object.keys(eqGo.ruleHits).forEach(function (k) { bound[k] = 1; });
+const idle = allRules.filter(function (r) { return !bound[r]; });
+console.log('\nWHAT THIS TAPE DOES AND DOES NOT SHOW (a number is only as honest as its caveats)');
+console.log('   • bound on real data: ' + Object.keys(bound).sort().join(', '));
+console.log('   • did NOT bind here:  ' + idle.join(', '));
+console.log('     These are guards, not duds — each is proven firing in the 61 self-tests. They simply');
+console.log('     did not trigger on THIS window: the kill-switches (daily-loss-breaker) are insurance the');
+console.log('     other caps + the strategy’s own de-risking kept us short of; the input guards (provenance,');
+console.log('     stale-data, off-market, restricted) never saw bad input from a clean signal; and pdt-rule');
+console.log('     needs INTRADAY bars to ever fire — a daily-bar strategy cannot round-trip within a session.');
+console.log('   • thresholds were NOT tuned to manufacture firings: the loss halt sits at a realistic -' + (eqPolicyCfg.maxDailyLossPct * 100) + '%,');
+console.log('     not the ~-1% it would take to make it bind on this gentle drawdown.');

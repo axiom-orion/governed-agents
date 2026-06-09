@@ -5,6 +5,7 @@
   "description": "A governed paper-trading agent across crypto AND US equities: a trade is the canonical irreversible action, so the policy gate is the point. Ungoverned breaches hard rules; governed breaches 0. A backtest-honesty auditor isolates four lies (lookahead, costs, ignored dividends, hindsight universe) and refuses to attest them. Eval on real, frozen data. No real money, ever.",
   "scripts": {
     "eval": "node eval/run_eval.js",
+    "trace": "node eval/emit_trace.js",
     "test": "node tests/gate.selftest.js && node tests/conductor.selftest.js && node tests/audit.selftest.js && node tests/equities.selftest.js",
     "test:gate": "node tests/gate.selftest.js",
     "test:conductor": "node tests/conductor.selftest.js",

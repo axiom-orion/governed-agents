@@ -57,7 +57,7 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Self-tests — gate · conductor · audit · equities (61 assertions)
+      - name: Self-tests — gate · conductor · audit · equities (66 assertions)
         run: npm test
 
       - name: Eval — reproduce the governance + honesty claims on frozen crypto + equities data

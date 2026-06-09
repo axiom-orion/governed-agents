@@ -61,7 +61,17 @@ ok('governed gated orders (blocked or held for a human)', gov.blocked + gov.held
 ok('both runs walked the identical tape', gov.bars === ung.bars && gov.bars === 3570);
 ok('dividends were credited as cash during the run', gov.divs > 0);
 ok('the equity book is long-only (no borrow/locate is modeled)', gov.assetClass === 'equity');
-ok('named rules did the work (a per-rule tally exists)', Object.keys(gov.ruleHits).length > 0 && Object.keys(gov.ruleHits).every(function (k) { return gov.ruleHits[k] > 0; }));
+ok('named rules did the work (a per-rule tally exists, blocks AND review/holds)', Object.keys(gov.ruleHits).length > 0 && Object.keys(gov.ruleHits).every(function (k) { return gov.ruleHits[k] > 0; }));
+ok('max drawdown is a non-positive, finite peak-to-trough number', gov.maxDrawdownPct <= 0 && gov.maxDrawdownPct > -100 && isFinite(gov.maxDrawdownPct));
+
+/* --- the NDJSON glass-box: a traced governed run is well-formed and shows every branch --- */
+const traced = C.run({ enforce: true, data: EQ.subset(['PTON', 'AAPL']), policyCfg: { maxGrossLeverage: 1.0, maxPositionPct: 0.30, maxOrderNotional: 20000, maxDailyLossPct: 0.03, maxGapPct: 0.08, minConfidence: 0.55, corroborationMinNotional: 8500 }, targetPct: 0.10, rebalanceBandPct: 0.03, trace: true });
+const lines = traced.trace.toNdjson().trim().split('\n').map(function (l) { return JSON.parse(l); });
+const types = {}; lines.forEach(function (e) { types[e.type] = 1; });
+const outcomes = {}; lines.filter(function (e) { return e.type === 'gate_decision'; }).forEach(function (e) { outcomes[e.decision.decision] = 1; });
+ok('the trace is valid NDJSON, run_started..run_completed', lines[0].type === 'run_started' && lines[lines.length - 1].type === 'run_completed');
+ok('the trace records the full decision lifecycle (proposed → decision → executed/halted/awaiting)', types.action_proposed && types.gate_decision && types.executed && types.halted && types.awaiting_approval);
+ok('the slice exercises all three gate outcomes (allow + block + needs_approval)', outcomes.allow && outcomes.block && outcomes.needs_approval);
 
 /* --- the four-lie audit --- */
 const h = AUDIT.honestyReportEquities({ policyCfg: policyCfg, targetPct: 0.15 });

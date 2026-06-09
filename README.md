@@ -196,14 +196,16 @@ asset classes — 24/7 crypto and calendar-bound US equities/ETFs (with cash div
 opening-gap circuit-breakers, and FINRA-style rules); no orders are ever placed. It makes
 two hand-waved claims measurable: governance (the *only* variable is the gate — an
 ungoverned order stream breaches hard rules on 16 crypto / 120 equity decisions, the
-governed runs on **0**) and honesty (a backtest auditor that isolates four lies —
-lookahead, zero-cost, hindsight universe, ignored dividends — and **refuses to attest**
-each). Run it from that directory:
+governed runs on **0**, and on crypto it cuts max drawdown from −3.7% to −2.6%) and honesty
+(a backtest auditor that isolates four lies — lookahead, zero-cost, hindsight universe,
+ignored dividends — and **refuses to attest** each, plus an eval that names which rules
+actually bound vs. which are only proven in the self-tests). Run it from that directory:
 
 ```sh
 cd examples/governed-trader
-npm test               # gate · conductor · audit · equities self-tests (61 assertions)
+npm test               # gate · conductor · audit · equities self-tests (66 assertions)
 node eval/run_eval.js  # reproduce the claims on both asset classes
+npm run trace          # stream a real NDJSON audit trace of a governed run
 ```
 
 ## Composed in production

@@ -44,6 +44,7 @@
     const lastPrice = {}, prevClose = {};
     let curDate = null, dayStartEquity = broker.cash(), worstDayLossPct = 0;
     let breaches = 0, blocked = 0, held = 0, fills = 0, step = 0, divsCredited = 0;
+    let peakEquity = broker.equity(lastPrice), maxDrawdownPct = 0; // peak-to-trough on the mark-to-market curve
 
     // asset-class plumbing: equities are long-only here (no borrow/locate modeled),
     // carry a trading calendar (the data's own dates), and pay cash dividends on the
@@ -54,8 +55,8 @@
     const divByBar = {};        // 'date|instrument' -> per-share cash amount
     Object.keys(data.DIVIDENDS || {}).forEach(function (ins) { data.DIVIDENDS[ins].forEach(function (d) { divByBar[d.ex + '|' + ins] = d.amount; }); });
     const tradingDays = new Set(bars.map(function (b) { return b.t; }));
-    const ruleHits = {};        // which named rules did the work (blocked or breached orders)
-    function tally(decision) { (decision.violations || []).forEach(function (v) { if ((v.severity || 'block') === 'block') ruleHits[v.rule] = (ruleHits[v.rule] || 0) + 1; }); }
+    const ruleHits = {};        // which named rules bound — by severity: blocks AND review/holds
+    function tally(decision, severity) { (decision.violations || []).forEach(function (v) { if ((v.severity || 'block') === severity) ruleHits[v.rule] = (ruleHits[v.rule] || 0) + 1; }); }
 
     bars.forEach(function (bar) {
       lastPrice[bar.instrument] = bar.close;
@@ -98,16 +99,20 @@
       let doFill = false;
       if (enforce) {
         if (decision.decision === 'allow') doFill = true;
-        else if (decision.decision === 'needs_approval') { held++; if (trace) trace.awaitingApproval(sid, GATE.reasonOf(decision, 'review')); }
-        else { blocked++; tally(decision); if (trace) trace.halted(sid, GATE.reasonOf(decision)); }
+        else if (decision.decision === 'needs_approval') { held++; tally(decision, 'review'); if (trace) trace.awaitingApproval(sid, GATE.reasonOf(decision, 'review')); }
+        else { blocked++; tally(decision, 'block'); if (trace) trace.halted(sid, GATE.reasonOf(decision)); }
       } else {
         doFill = true;                                              // ungoverned: execute regardless
-        if (hardViolation(decision)) { breaches++; tally(decision); } // ...and a violating fill is a breach
+        if (hardViolation(decision)) { breaches++; tally(decision, 'block'); } // ...and a violating fill is a breach
       }
       if (doFill) { broker.fill(order); fills++; if (trace) trace.executed(sid, order.side + ' ' + order.qty.toFixed(4) + ' ' + order.instrument); }
 
-      const dd = (broker.equity(lastPrice) - dayStartEquity) / dayStartEquity;
+      const mtm = broker.equity(lastPrice);
+      const dd = (mtm - dayStartEquity) / dayStartEquity;
       if (dd < worstDayLossPct) worstDayLossPct = dd;
+      if (mtm > peakEquity) peakEquity = mtm;                          // running high-water mark
+      const draw = (mtm - peakEquity) / peakEquity;                   // peak-to-trough drawdown (≤ 0)
+      if (draw < maxDrawdownPct) maxDrawdownPct = draw;
     });
 
     if (trace) trace.runCompleted();
@@ -119,6 +124,7 @@
       returnPct: +(((finalEquity / (opts.cash || 100000)) - 1) * 100).toFixed(2),
       breaches: breaches, blocked: blocked, held: held, fills: fills, bars: bars.length,
       worstDayLossPct: +(worstDayLossPct * 100).toFixed(2),
+      maxDrawdownPct: +(maxDrawdownPct * 100).toFixed(2),
       fees: +broker.fees().toFixed(2),
       divs: +divsCredited.toFixed(2),
       ruleHits: ruleHits,

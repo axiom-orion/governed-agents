@@ -19,6 +19,7 @@ ok('governed blocked the reckless orders', gov.blocked > 0);
 // the books may legitimately diverge after the first blocked order (a block changes
 // positions, which changes later proposals) — the controlled invariant is the TAPE.
 ok('the only variable is the gate — both runs walked the identical tape', gov.bars === ung.bars && gov.bars > 0);
+ok('max drawdown is reported as a non-positive, finite peak-to-trough number', gov.maxDrawdownPct <= 0 && gov.maxDrawdownPct > -100 && isFinite(gov.maxDrawdownPct));
 console.log('  · governed: ' + gov.returnPct + '% net, ' + gov.blocked + ' blocked, worst day ' + gov.worstDayLossPct + '%');
 console.log('  · ungoverned: ' + ung.returnPct + '% net, ' + ung.breaches + ' breaches, worst day ' + ung.worstDayLossPct + '%');
 

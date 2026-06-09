@@ -20,9 +20,12 @@ It makes two hand-waved claims measurable:
 
 > **Governance.** Same tape, signals, sizing, and costs — the *only* variable is the gate.
 > On crypto, an **ungoverned** order stream breaches hard rules on **16** decisions; the
-> **governed** run breaches **0**. On equities: **120 → 0**, with **3** large single-source
-> orders routed to a human, every block carrying a named rule and a logged reason
-> (`min-confidence ×192, max-gross-leverage ×16, gap-circuit-breaker ×5`).
+> **governed** run breaches **0** — and is *better risk-adjusted*, giving up 2.26 pts of
+> return to cut **max drawdown from −3.73% to −2.58%**. On equities: **120 → 0**, with **3**
+> large single-source orders routed to a human, every block carrying a named rule and a
+> logged reason (`min-confidence ×192, max-gross-leverage ×16, gap-circuit-breaker ×5,
+> require-corroboration ×3`). There it costs **0.55 pts** — governance is insurance you pay
+> for, not a return booster, and the eval says so out loud.
 >
 > **Honesty.** On equities the honest result is a **LOSS (−6.51%)** — point-in-time, net of
 > costs, dividends credited, universe chosen at the start. Let the same strategy cheat
@@ -32,6 +35,9 @@ It makes two hand-waved claims measurable:
 > book — honesty is not pessimism) — and **refuses to attest** any of them.
 
 Numbers produced by `node eval/run_eval.js`, not asserted. CPU-only, no API key, no network.
+The eval closes with a **caveats** section naming which rules actually bound on this tape and
+which are guards proven only in the self-tests — because a number is only as honest as its
+footnotes.
 
 ```
 3) GOVERNANCE, US equities — 10 instruments × 357 trading days, long-only
@@ -39,8 +45,10 @@ Numbers produced by `node eval/run_eval.js`, not asserted. CPU-only, no API key,
    hard-rule breaches    120           0
    blocked / held        —             209 / 3
    worst single-day      -2.6%         -2.53%   (halt: -3%)
+   max drawdown          -14.67%       -15.06%
    net return            -7.13%        -7.68%
-   rules that did the work: min-confidence ×192, max-gross-leverage ×16, gap-circuit-breaker ×5
+   rules that bound on this tape: min-confidence ×192, max-gross-leverage ×16,
+                                  gap-circuit-breaker ×5, require-corroboration ×3
 4) HONESTY, US equities — naive (all four lies) 50.11%  vs  honest -6.51%
    lookahead +137.03 · zero-cost +7.84 · hindsight universe +4.88 · ignored dividends -0.23 pts
    attest(no dividends, hindsight universe): REFUSED
@@ -60,7 +68,7 @@ Numbers produced by `node eval/run_eval.js`, not asserted. CPU-only, no API key,
 
 A loop mirroring [`governed-agents`](../../) and the cason-heritage Keeper: walk the tape
 point-in-time → **strategy** proposes an order → **gate** decides → execute (paper) /
-hold-for-approval / block → track P&L, the daily drawdown, and an NDJSON trace. It
+hold-for-approval / block → track P&L, worst-day and peak-to-trough drawdown, and an NDJSON trace. It
 **reuses governed-agents' `evaluatePolicy` + `TraceEvent` contract**, pointed at the
 highest-stakes action there is.
 
@@ -83,6 +91,14 @@ controlled by a no-trade **rebalance band**, like a real desk.
 | `require-corroboration` (a large single-source bet needs a 2nd signal or a human) | needs-approval |
 | `live-needs-approval` (live mode — the top tier is unoccupied) | needs-approval |
 
+Not all of these bind on the bundled window, and the eval **says which** rather than implying
+they all fire: on this tape `min-confidence`, `max-gross-leverage`, `gap-circuit-breaker`, and
+`require-corroboration` do the work. The rest are guards proven firing in the self-tests but
+not triggered here — the `daily-loss-breaker` is insurance the other caps kept us short of (it
+would take a contrived ~−1% halt to bind on this gentle drawdown, and tuning it there would be
+dishonest), the input guards never saw bad input from a clean signal, and **`pdt-rule` needs
+intraday bars to ever fire** — a daily-bar strategy cannot round-trip within a session.
+
 Two design rules learned from real risk systems, encoded and self-tested:
 
 - **Reduce-only exemption.** Size and conviction caps gate *new* risk only — a book must
@@ -101,11 +117,26 @@ zero-cost). Equities add the two stock-specific ones: a **hindsight-picked unive
 auditor runs the same strategy with each lie switched on in isolation, reports the
 overstatement, and **refuses to attest** a run that cheated — the gate, applied to numbers.
 
+### The audit trace — the glass-box, as data
+
+Every governed decision is streamed as an NDJSON `TraceEvent` (`run_started` →
+`action_proposed` → `gate_decision` → `executed`/`awaiting_approval`/`halted` →
+`run_completed`) — the same wire format [`governed-agents`](../../) renders in its trace UI.
+`npm run trace` runs a two-name slice chosen to exercise **all three outcomes** plus real
+fills and a credited dividend, and prints a readable sample; add `--ndjson` to capture the
+full machine-readable stream:
+
+```sh
+npm run trace                              # human summary + one of each outcome
+node eval/emit_trace.js --ndjson > trace.ndjson   # the full event stream
+```
+
 ## Run it
 
 ```sh
 node eval/run_eval.js     # the measured claims on both asset classes, frozen real data
-npm test                  # the self-tests (gate · conductor · audit · equities) — 61 assertions
+npm test                  # the self-tests (gate · conductor · audit · equities) — 66 assertions
+npm run trace             # stream a real NDJSON audit trace of a governed run
 ```
 
 ## Layout
@@ -120,7 +151,9 @@ npm test                  # the self-tests (gate · conductor · audit · equiti
 | `data/candles.js` | real BTC/ETH/SOL daily closes, frozen for reproducibility |
 | `data/equities.js` | real US equities/ETFs: opens+closes + dividend events, one NYSE calendar, frozen |
 | `data/fetch_equities.mjs` | the one-shot fetcher that froze it (asserts a split-free window, one calendar) |
-| `eval/run_eval.js` · `tests/*.selftest.js` | the measured claims + the self-tests |
+| `eval/run_eval.js` | the measured claims on both asset classes, with a caveats footer |
+| `eval/emit_trace.js` | streams a real NDJSON audit trace (`npm run trace`) |
+| `tests/*.selftest.js` | the self-tests — gate · conductor · audit · equities (66 assertions) |
 
 ## Roadmap
 
