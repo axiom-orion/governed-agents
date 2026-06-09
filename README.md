@@ -185,6 +185,15 @@ scripts/verify-trace.ts headless contract test (CI)
 docs/ARCHITECTURE.md   data flow + full event schema
 ```
 
+## Composed in production
+
+The `evaluatePolicy` + `TraceEvent` contract here is ported into a live consumer:
+[**cason-heritage**](https://github.com/axiom-orion/cason-heritage) ([flcason.com](https://flcason.com)).
+Its genealogy "Keeper" decides every proposed record with the same typed gate
+(allow / needs-approval / block, named rules with thresholds) and writes the same
+NDJSON `TraceEvent` audit trail — the gate and the glass-box you can watch in the demo
+here, running on a real family's record.
+
 ## About
 
 Built by **[axiom-orion](https://github.com/axiom-orion)** as a portfolio project
