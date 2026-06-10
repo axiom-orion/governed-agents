@@ -34,6 +34,11 @@ jobs:
       - name: Trace projection contract (P4 UI)
         run: npx tsx scripts/verify-trace.ts
 
+      - name: Attested independence + Red Cell (32 checks, zero keys)
+        run: npx tsx scripts/verify-governance.ts
+        env:
+          AGENTS_OFFLINE: "1"
+
       - name: Loop smoke test — allow + block must hit expected gate outcomes
         run: npm run demo
         env:

@@ -83,6 +83,9 @@ beats a **review** request beats **allow**:
 | `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data (SSN / card / phone) |
 | `destructive-action-needs-approval` | `delete_record` / destructive kinds | **needs-approval** unless an approval token is attached |
 | `require-model-consensus` | multi-model (triad) runs | **needs-approval** when model agreement falls below the threshold (default unanimous) |
+| `require-distinct-voices` | multi-model (triad) runs | **needs-approval** when the agreeing votes resolve to fewer than 2 distinct attested model instances — corroboration counts voices, not echoes |
+| `red-cell-independence` | red-cell-reviewed actions | **needs-approval** when the reviewing instance is (or cannot be proven not to be) the proposing instance — oversight is theater otherwise |
+| `red-cell-objection` | red-cell-reviewed actions | **needs-approval** when the adversarial reviewer objects, with the critique attached |
 
 The thresholds are genuinely editable: they flow to the **Live** backend in the
 request body, and the **Sample** replay **recomputes** the gate
@@ -98,6 +101,21 @@ holds the run for a human instead of acting on a split decision. A provider with
 key simply **abstains**, so it degrades gracefully to a single model. Set
 `GEMINI_API_KEY` + `XAI_API_KEY` to light up Live; the *“model triad agrees / splits”*
 Sample scenarios demo it with zero keys.
+
+### Attested independence + the Red Cell (oversight that can prove it's not theater)
+
+Every vote now carries an attested **voice identity** — the configured
+`(provider, model id)` pair — and the consensus records how many **distinct
+instances** actually backed the chosen action. A unanimous "consensus" whose agreeing
+votes resolve to one instance is one voice echoed N times; `require-distinct-voices`
+routes it to a human instead of honoring it. After the action is chosen, the **Red
+Cell** ([`lib/redcell.ts`](lib/redcell.ts)) — an adversarial *mode*, not a fourth
+agent — runs on an instance provably distinct from the generator and makes the
+strongest case against the action; the gate refuses to honor its verdict if the
+voices collapse, and parks any objection for a human. Honest scope: for API-backed
+voices this attests what we *configured and called* — it cannot see through a
+provider's internal routing, and that residual trust is named, not papered over.
+Verified headlessly (32 checks, zero keys): `npx tsx scripts/verify-governance.ts`.
 
 Verify your keys + model ids from the terminal before deploying:
 
