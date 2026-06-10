@@ -43,6 +43,7 @@ import { ProvenancePanel } from "@/components/panels/ProvenancePanel";
 import { GateDecision } from "@/components/panels/GateDecision";
 import { PoliciesPanel } from "@/components/panels/PoliciesPanel";
 import { ConsensusPanel } from "@/components/panels/ConsensusPanel";
+import { OversightPanel } from "@/components/panels/OversightPanel";
 import { StepDetail } from "@/components/panels/StepDetail";
 import { RawTraceDrawer } from "@/components/RawTraceDrawer";
 
@@ -105,6 +106,18 @@ const SCENARIOS: readonly Scenario[] = [
     label: "Needs approval — model triad splits",
     outcome: "needs_approval",
     tag: "model consensus",
+  },
+  {
+    id: "echo",
+    label: "Needs approval — unanimous, but one voice echoed",
+    outcome: "needs_approval",
+    tag: "attested independence",
+  },
+  {
+    id: "redcell",
+    label: "Needs approval — the Red Cell objects",
+    outcome: "needs_approval",
+    tag: "adversarial oversight",
   },
 ];
 
@@ -561,6 +574,12 @@ export function TraceViewer() {
                     consensus={gatedConsensus}
                     threshold={appliedConsensusThreshold}
                   />
+                </>
+              ) : null}
+              {gatedAction?.redCell ? (
+                <>
+                  <div className="border-t border-slate-100" />
+                  <OversightPanel action={gatedAction} />
                 </>
               ) : null}
               <div className="border-t border-slate-100" />

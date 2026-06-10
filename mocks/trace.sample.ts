@@ -652,6 +652,209 @@ export const splitRun: readonly TraceEvent[] = [
   { type: "run_completed", runId: "run_split_9d4e", at: "2026-06-05T12:30:05.860Z" },
 ];
 
+// --- ATTESTED INDEPENDENCE: UNANIMOUS ECHO → NEEDS APPROVAL ----------------
+// All three votes agree (100%), so require-model-consensus is satisfied — but their
+// attested voices resolve to ONE model instance. Corroboration counts voices, not the
+// votes that echo them, so require-distinct-voices routes it to a human.
+export const echoConsensusRun: readonly TraceEvent[] = [
+  {
+    type: "run_started",
+    runId: "run_echo_2d1b",
+    task: "Confirm the vendor's SOC 2 status and record it for procurement.",
+    at: "2026-06-06T09:00:00.000Z",
+  },
+  { type: "step_started", stepId: "e1", role: "researcher", at: "2026-06-06T09:00:00.200Z" },
+  {
+    type: "step_completed",
+    stepId: "e1",
+    role: "researcher",
+    summary: "One vendor blog post asserts SOC 2 Type II; no independent attestation found.",
+    provenance: [
+      {
+        sourceId: "doc:vendor-blog-soc2",
+        snippet: "The vendor's own blog states it is SOC 2 Type II certified.",
+        score: 0.55,
+      },
+    ],
+    at: "2026-06-06T09:00:02.300Z",
+  },
+  { type: "step_started", stepId: "e2", role: "reasoner", at: "2026-06-06T09:00:02.380Z" },
+  {
+    type: "step_completed",
+    stepId: "e2",
+    role: "reasoner",
+    summary: "Three votes agree to record it — but every vote is the same instance.",
+    provenance: [
+      {
+        sourceId: "doc:vendor-blog-soc2",
+        snippet: "The vendor's own blog states it is SOC 2 Type II certified.",
+        score: 0.55,
+      },
+    ],
+    at: "2026-06-06T09:00:05.400Z",
+  },
+  {
+    type: "action_proposed",
+    stepId: "e2",
+    action: {
+      kind: "write_record",
+      payload: { collection: "procurement", title: "Vendor SOC 2", status: "certified" },
+      justification: "Record the vendor's SOC 2 status for the procurement file.",
+      provenance: [
+        {
+          sourceId: "doc:vendor-blog-soc2",
+          snippet: "The vendor's own blog states it is SOC 2 Type II certified.",
+          score: 0.55,
+        },
+      ],
+      proposedBy: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      consensus: {
+        votes: [
+          {
+            model: "claude",
+            kind: "write_record",
+            justification: "Record it.",
+            voice: { provider: "anthropic", model: "claude-sonnet-4-6" },
+          },
+          {
+            model: "claude",
+            kind: "write_record",
+            justification: "Record it.",
+            voice: { provider: "anthropic", model: "claude-sonnet-4-6" },
+          },
+          {
+            model: "claude",
+            kind: "write_record",
+            justification: "Record it.",
+            voice: { provider: "anthropic", model: "claude-sonnet-4-6" },
+          },
+        ],
+        agreementRatio: 1,
+        chosenKind: "write_record",
+        distinctVoices: 1,
+      },
+    },
+    at: "2026-06-06T09:00:05.500Z",
+  },
+  {
+    type: "gate_decision",
+    stepId: "e2",
+    decision: {
+      decision: "needs_approval",
+      violations: [
+        {
+          rule: "require-distinct-voices",
+          detail:
+            "3 agreeing vote(s) resolve to 1 distinct model instance(s) — corroboration counts voices, not echoes (need ≥ 2)",
+          severity: "review",
+        },
+      ],
+      evaluatedAt: "2026-06-06T09:00:05.560Z",
+    },
+    at: "2026-06-06T09:00:05.560Z",
+  },
+  {
+    type: "awaiting_approval",
+    stepId: "e2",
+    reason:
+      "require-distinct-voices: 3 agreeing vote(s) resolve to 1 distinct model instance(s) — corroboration counts voices, not echoes (need ≥ 2)",
+    at: "2026-06-06T09:00:05.620Z",
+  },
+  { type: "run_completed", runId: "run_echo_2d1b", at: "2026-06-06T09:00:05.700Z" },
+];
+
+// --- RED CELL: INDEPENDENT OBJECTION → NEEDS APPROVAL ----------------------
+// The Reasoner proposes an action; an independent reviewer (a provably distinct
+// instance) makes the case against it and objects, so red-cell-objection routes it
+// to a human with the critique attached.
+export const redCellRun: readonly TraceEvent[] = [
+  {
+    type: "run_started",
+    runId: "run_redcell_4f7c",
+    task: "Merge the Causey cluster into the Cason paternal line if the evidence supports it.",
+    at: "2026-06-07T14:00:00.000Z",
+  },
+  { type: "step_started", stepId: "r1", role: "researcher", at: "2026-06-07T14:00:00.200Z" },
+  {
+    type: "step_completed",
+    stepId: "r1",
+    role: "researcher",
+    summary: "Name adjacency (Cason/Causey) and an overlapping VA→MD migration window.",
+    provenance: [
+      {
+        sourceId: "doc:dorchester-causey-1670",
+        snippet: "A John Causey appears in Dorchester County, MD records c. 1670.",
+        score: 0.5,
+      },
+    ],
+    at: "2026-06-07T14:00:02.300Z",
+  },
+  { type: "step_started", stepId: "r2", role: "reasoner", at: "2026-06-07T14:00:02.380Z" },
+  {
+    type: "step_completed",
+    stepId: "r2",
+    role: "reasoner",
+    summary: "Proposes recording the merge as a leading hypothesis.",
+    provenance: [
+      {
+        sourceId: "doc:dorchester-causey-1670",
+        snippet: "A John Causey appears in Dorchester County, MD records c. 1670.",
+        score: 0.5,
+      },
+    ],
+    at: "2026-06-07T14:00:05.400Z",
+  },
+  {
+    type: "action_proposed",
+    stepId: "r2",
+    action: {
+      kind: "write_record",
+      payload: { collection: "lineage", title: "Cason–Causey merge", confidence: "leading" },
+      justification: "Name and geography align, so record the merge as a leading hypothesis.",
+      provenance: [
+        {
+          sourceId: "doc:dorchester-causey-1670",
+          snippet: "A John Causey appears in Dorchester County, MD records c. 1670.",
+          score: 0.5,
+        },
+      ],
+      proposedBy: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      redCell: {
+        verdict: "object",
+        critique:
+          "Name adjacency plus an overlapping migration window is a single indirect strand, not corroboration; no primary record ties the lines, so this fails the proof standard and must not be recorded as leading.",
+        voice: { provider: "grok", model: "grok-3" },
+      },
+    },
+    at: "2026-06-07T14:00:05.500Z",
+  },
+  {
+    type: "gate_decision",
+    stepId: "r2",
+    decision: {
+      decision: "needs_approval",
+      violations: [
+        {
+          rule: "red-cell-objection",
+          detail:
+            "the red cell (grok/grok-3) objects: Name adjacency plus an overlapping migration window is a single indirect strand, not corroboration; no primary record ties the lines…",
+          severity: "review",
+        },
+      ],
+      evaluatedAt: "2026-06-07T14:00:05.560Z",
+    },
+    at: "2026-06-07T14:00:05.560Z",
+  },
+  {
+    type: "awaiting_approval",
+    stepId: "r2",
+    reason:
+      "red-cell-objection: the red cell (grok/grok-3) objects: Name adjacency plus an overlapping migration window is a single indirect strand, not corroboration…",
+    at: "2026-06-07T14:00:05.620Z",
+  },
+  { type: "run_completed", runId: "run_redcell_4f7c", at: "2026-06-07T14:00:05.700Z" },
+];
+
 export type SampleRunId =
   | "allow"
   | "block"
@@ -659,7 +862,9 @@ export type SampleRunId =
   | "approval"
   | "approved"
   | "consensus"
-  | "split";
+  | "split"
+  | "echo"
+  | "redcell";
 
 export const sampleRuns: Readonly<Record<SampleRunId, readonly TraceEvent[]>> = {
   allow: allowRun,
@@ -669,6 +874,8 @@ export const sampleRuns: Readonly<Record<SampleRunId, readonly TraceEvent[]>> = 
   approved: approvedRun,
   consensus: consensusRun,
   split: splitRun,
+  echo: echoConsensusRun,
+  redcell: redCellRun,
 };
 
 // --- serialization + replay ------------------------------------------------

@@ -117,6 +117,13 @@ voices this attests what we *configured and called* — it cannot see through a
 provider's internal routing, and that residual trust is named, not papered over.
 Verified headlessly (32 checks, zero keys): `npx tsx scripts/verify-governance.ts`.
 
+Both are **glass-boxed in the trace UI**: the consensus panel shows each vote's attested
+`provider/model` and flags an *echo* (agreeing votes that resolve to one instance); a Red
+Cell panel shows the reviewer's verdict, its attested identity, and whether it's independent
+of the proposer. Two Sample scenarios demo them with zero keys — *"unanimous, but one voice
+echoed"* and *"the Red Cell objects"* — and the projections are pinned in `verify-trace`
+(70 checks).
+
 Verify your keys + model ids from the terminal before deploying:
 
 ```bash
