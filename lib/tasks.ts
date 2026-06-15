@@ -18,7 +18,7 @@ export const SEED_TASKS: readonly SeedTask[] = [
     label: "Allowed — well-sourced internal record",
     expected: "allow",
     task:
-      "Summarize the published Q2 refund policy update and record an internal note summarizing the change for the support team.",
+      'Record an internal note that copies the following source sentence verbatim for the support team to reference, adding nothing and interpreting nothing: "Q2 refund policy update: refunds are issued within 5 business days for cancellations made in the first 30 days."',
   },
   {
     id: "blocked",
