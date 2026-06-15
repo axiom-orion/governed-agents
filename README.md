@@ -208,6 +208,7 @@ components/            React Flow canvas + hero + guided walkthrough + audit pan
 mocks/trace.sample.ts  recorded runs for the instant Sample mode
 scripts/verify-trace.ts headless contract test (CI)
 docs/ARCHITECTURE.md   data flow + full event schema
+docs/STATUS.md         current state, decisions, operational setup + open items
 examples/governed-trader/  the same gate on a trade — the canonical irreversible action
 ```
 
