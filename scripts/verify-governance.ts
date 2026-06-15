@@ -18,6 +18,7 @@ import {
   buildPolicy,
   distinctVoicesFor,
   evaluatePolicy,
+  isConsequentialKind,
   makeRequireDistinctVoices,
   redCellMustBeIndependent,
   redCellObjection,
@@ -214,6 +215,13 @@ async function main(): Promise<void> {
   const onlyGenerator = await runRedCell("t", reviewedBy, [reviewerVoter(claude, concurVerdict)]);
   check("fallback: no independent voice (only the generator can review) -> undefined", onlyGenerator === undefined);
 
+  // --- 3c) the Red Cell is scoped to consequential actions ------------------------
+  // Adversarial review is reserved for what can cause harm — sends and destructive
+  // kinds — not every internal note (the hard rules still gate those).
+  check("consequential: send_email -> true", isConsequentialKind("send_email"));
+  check("consequential: delete_record -> true", isConsequentialKind("delete_record"));
+  check("consequential: write_record -> false (internal note)", !isConsequentialKind("write_record"));
+
   // --- 4) deterministic offline two-voter path, end to end ------------------------
   // Two offline stubs under different model ids are attested-distinct by construction,
   // so consensus + red cell run with zero keys — the same discipline as the CI demo.
@@ -252,29 +260,59 @@ async function main(): Promise<void> {
     evaluatePolicy(withRedCell(weakProposed, weakReview), buildPolicy()).decision === "needs_approval",
   );
 
-  // full loop with injected voters: the trace carries the consensus + review and parks
-  const events: TraceEvent[] = [];
+  // full loop A — an INTERNAL record: the hard rules still gate it, but the Red Cell is
+  // scoped out (no generative red team on internal notes), so it allows and executes —
+  // even though runRedCell, called directly above, would have objected to this material.
+  const recordEvents: TraceEvent[] = [];
   for await (const e of runLoop(weakTask, OFFLINE_VOICE_FIXTURES.client, buildPolicy(), voters)) {
-    events.push(e);
+    recordEvents.push(e);
   }
-  const proposedEvent = events.find((e) => e.type === "action_proposed");
-  const gateEvent = events.find((e) => e.type === "gate_decision");
-  const parked = events.find((e) => e.type === "awaiting_approval");
+  const recordProposed = recordEvents.find((e) => e.type === "action_proposed");
   check(
-    "loop: action_proposed carries consensus + red cell",
-    proposedEvent?.type === "action_proposed" &&
-      proposedEvent.action.consensus?.distinctVoices === 2 &&
-      proposedEvent.action.redCell?.verdict === "object",
+    "loop(write_record): consensus attached but the Red Cell is scoped out (no redCell)",
+    recordProposed?.type === "action_proposed" &&
+      recordProposed.action.kind === "write_record" &&
+      recordProposed.action.consensus?.distinctVoices === 2 &&
+      recordProposed.action.redCell === undefined,
   );
   check(
-    "loop: gate parks the run for a human on the objection",
-    gateEvent?.type === "gate_decision" && gateEvent.decision.decision === "needs_approval" && parked !== undefined,
+    "loop(write_record): allowed and executed (no oversight needed for an internal note)",
+    recordEvents.some((e) => e.type === "gate_decision" && e.decision.decision === "allow") &&
+      recordEvents.some((e) => e.type === "executed"),
   );
   check(
-    "loop: parked reason names the red cell",
-    parked?.type === "awaiting_approval" && parked.reason.includes("red-cell-objection"),
+    "loop(write_record): ends with run_completed",
+    recordEvents[recordEvents.length - 1]?.type === "run_completed",
   );
-  check("loop: still ends with run_completed", events[events.length - 1]?.type === "run_completed");
+
+  // full loop B — a CONSEQUENTIAL outbound send that clears the hard rules (a 1.00 source)
+  // but draws an independent objection: the Red Cell runs and the run parks for a human.
+  const sendTask =
+    "Email partner@example.com the Q2 refund policy update; flag that it rests on a single source.";
+  const sendEvents: TraceEvent[] = [];
+  for await (const e of runLoop(sendTask, OFFLINE_VOICE_FIXTURES.client, buildPolicy(), voters)) {
+    sendEvents.push(e);
+  }
+  const sendProposed = sendEvents.find((e) => e.type === "action_proposed");
+  const sendGate = sendEvents.find((e) => e.type === "gate_decision");
+  const sendParked = sendEvents.find((e) => e.type === "awaiting_approval");
+  check(
+    "loop(send_email): the Red Cell runs on the consequential action and objects",
+    sendProposed?.type === "action_proposed" &&
+      sendProposed.action.kind === "send_email" &&
+      sendProposed.action.redCell?.verdict === "object",
+  );
+  check(
+    "loop(send_email): the independent objection parks the run for a human",
+    sendGate?.type === "gate_decision" &&
+      sendGate.decision.decision === "needs_approval" &&
+      sendParked?.type === "awaiting_approval" &&
+      sendParked.reason.includes("red-cell-objection"),
+  );
+  check(
+    "loop(send_email): ends with run_completed",
+    sendEvents[sendEvents.length - 1]?.type === "run_completed",
+  );
 
   // --- report ----------------------------------------------------------------------
   const failed = results.filter((r) => !r.ok);
