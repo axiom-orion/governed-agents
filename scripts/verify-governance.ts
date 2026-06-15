@@ -31,6 +31,8 @@ import { runConsensusReasoner, voiceOf } from "../lib/consensus";
 import { runRedCell, withRedCell } from "../lib/redcell";
 import { runLoop } from "../lib/loop";
 import { OFFLINE_VOICE_FIXTURES, offlineVoterPair } from "../mocks/governance.fixtures";
+import type { Voter } from "../lib/providers";
+import type { ActionDraft, ActionProposer, RedCellDraft } from "../lib/model-client";
 import type { TraceEvent } from "../lib/trace-events";
 
 interface Result {
@@ -60,6 +62,21 @@ function actionWith(consensus?: Consensus, extra: Partial<ProposedAction> = {}):
     ...(consensus !== undefined ? { consensus } : {}),
     ...extra,
   };
+}
+
+// A fake reviewer voice for the fallback-chain checks. Its review() either fails (the
+// provider errored / was safety-filtered) or returns a fixed verdict. voiceOf() reads
+// the proposer label + model, so these are attested-distinct by construction.
+function reviewerVoter(voice: VoiceIdentity, behavior: "fail" | RedCellDraft): Voter {
+  const proposer: ActionProposer = {
+    label: voice.provider,
+    proposeAction: async (): Promise<ActionDraft> => ({ kind: "write_record", justification: "j" }),
+    review: async (): Promise<RedCellDraft> => {
+      if (behavior === "fail") throw new Error(`${voice.provider} review unavailable`);
+      return behavior;
+    },
+  };
+  return { proposer, model: voice.model };
 }
 
 async function main(): Promise<void> {
@@ -156,6 +173,46 @@ async function main(): Promise<void> {
       buildPolicy(),
     ).decision === "needs_approval",
   );
+
+  // --- 3b) the reviewer fallback chain: a failed voice falls through, not silent ---
+  // The reviewer is always an independent voice, tried in order; one that fails (e.g. a
+  // provider safety filter rejecting the adversarial prompt) must not drop oversight.
+  const objVerdict: RedCellDraft = { verdict: "object", critique: "single-source claim" };
+  const concurVerdict: RedCellDraft = { verdict: "concur", critique: "no case stands" };
+  const reviewedBy = actionWith(undefined, { proposedBy: claude });
+
+  const fellThrough = await runRedCell("t", reviewedBy, [
+    reviewerVoter(claude, concurVerdict), // the generator — must be skipped
+    reviewerVoter(gemini, "fail"), // first independent voice fails
+    reviewerVoter(grok, concurVerdict), // oversight falls through to here
+  ]);
+  check(
+    "fallback: a failed reviewer falls through to the next independent voice",
+    fellThrough !== undefined && sameVoice(fellThrough.voice, grok) && fellThrough.verdict === "concur",
+    fellThrough && `reviewer=${fellThrough.voice.provider}`,
+  );
+  check(
+    "fallback: the generator is never its own reviewer",
+    fellThrough !== undefined && !sameVoice(fellThrough.voice, claude),
+  );
+
+  const firstWins = await runRedCell("t", reviewedBy, [
+    reviewerVoter(gemini, objVerdict),
+    reviewerVoter(grok, concurVerdict),
+  ]);
+  check(
+    "fallback: the first independent voice that returns a verdict wins",
+    firstWins !== undefined && sameVoice(firstWins.voice, gemini) && firstWins.verdict === "object",
+  );
+
+  const allFail = await runRedCell("t", reviewedBy, [
+    reviewerVoter(gemini, "fail"),
+    reviewerVoter(grok, "fail"),
+  ]);
+  check("fallback: every independent voice failing -> undefined (abstain, never faked)", allFail === undefined);
+
+  const onlyGenerator = await runRedCell("t", reviewedBy, [reviewerVoter(claude, concurVerdict)]);
+  check("fallback: no independent voice (only the generator can review) -> undefined", onlyGenerator === undefined);
 
   // --- 4) deterministic offline two-voter path, end to end ------------------------
   // Two offline stubs under different model ids are attested-distinct by construction,
