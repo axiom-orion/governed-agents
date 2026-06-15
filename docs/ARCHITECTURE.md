@@ -132,15 +132,20 @@ The third state (`needs_approval`) models human-in-the-loop: the run parks at an
 Every `ModelVote` carries a `voice: { provider, model }` — the attested identity the
 vote was cast under — and `Consensus.distinctVoices` counts the distinct instances
 behind the chosen kind; `ProposedAction.proposedBy` attests the generator. After the
-Reasoner, when a review-capable instance distinct from the generator exists,
-`lib/redcell.ts` attaches a `redCell: { verdict, critique, voice }` adversarial
-review to the action; the three rules above make independence *checked*, not assumed.
+Reasoner, on **consequential actions only** (outbound sends + destructive kinds —
+internal records are gated by the hard rules but skip the generative red team),
+`lib/redcell.ts` runs an adversarial review: it tries each independent (non-generator)
+review-capable voice **in order** and attaches the first verdict as
+`redCell: { verdict, critique, voice }`, so a reviewer that fails (timeout, a provider
+safety filter rejecting the adversarial prompt) falls through to the next rather than
+dropping oversight. The three rules above make independence *checked*, not assumed.
 All additive/optional — legacy traces parse unchanged, and `distinctVoices` falls back
 to provider labels when voices are absent. Scope honesty: a voice attests the
 configured `(provider, model id)` that was called; it cannot attest a provider's
 internal routing. Headless verification: `npx tsx scripts/verify-governance.ts`
-(32 checks: echo-collapse review, voice-collapse review, objection routing, plus a
-deterministic offline two-voter loop end to end).
+(42 checks: echo-collapse + voice-collapse review, objection routing, the reviewer
+fallback chain, the consequential-only scope, plus deterministic offline two-voter
+loop runs end to end).
 
 ### Model consensus (the triad)
 
