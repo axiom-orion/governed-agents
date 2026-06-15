@@ -7,8 +7,8 @@
 //
 // Complementary to corroboration, not a substitute: `require-distinct-voices` is the
 // structural filter (echoes don't count), this is the generative hunter (go find the
-// disconfirming case). Degrades gracefully — no distinct review-capable voice, or a
-// failed call, simply means no review is attached; the loop never crashes on oversight.
+// disconfirming case). Degrades gracefully — with no independent review-capable voice,
+// or when every one fails, no review is attached; the loop never crashes on oversight.
 
 import { sameVoice, type ProposedAction, type RedCellReview } from "./governance";
 import type { Voter } from "./providers";
@@ -32,11 +32,15 @@ export function redCellUserPrompt(task: string, action: ProposedAction): string 
 }
 
 /**
- * Run the Red Cell on a proposed action. Picks the first voter whose attested voice
- * differs from the action's `proposedBy` and that exposes the review capability;
- * returns undefined when no such voice exists (single-voter runs, unattested
- * generators) or when the review call fails — oversight that cannot be independent
- * is not faked.
+ * Run the Red Cell on a proposed action. Oversight must be provably independent, so it
+ * considers only voices whose attested identity differs from the generator's
+ * (`proposedBy`). It tries those review-capable voices IN ORDER and returns the first
+ * verdict it gets, so when one reviewer's call fails — a timeout, a provider safety
+ * filter rejecting the adversarial prompt, a malformed verdict — oversight falls through
+ * to the next independent voice instead of silently vanishing. Returns undefined only
+ * when no independent voice exists (single-voter runs, an unattested generator) or every
+ * one fails: oversight that cannot be made independent is never faked, and a failed
+ * reviewer never fails the run.
  */
 export async function runRedCell(
   task: string,
@@ -45,20 +49,19 @@ export async function runRedCell(
 ): Promise<RedCellReview | undefined> {
   const generator = action.proposedBy;
   if (generator === undefined) return undefined;
-  const reviewer = voters.find(
-    (v) => v.proposer.review !== undefined && !sameVoice(voiceOf(v), generator),
-  );
-  if (reviewer === undefined || reviewer.proposer.review === undefined) return undefined;
-  try {
-    const draft = await reviewer.proposer.review({
-      system: RED_CELL_SYSTEM,
-      user: redCellUserPrompt(task, action),
-      model: reviewer.model,
-    });
-    return { verdict: draft.verdict, critique: draft.critique, voice: voiceOf(reviewer) };
-  } catch {
-    return undefined; // a failed reviewer abstains; it never fails the run
+  const user = redCellUserPrompt(task, action);
+  for (const reviewer of voters) {
+    if (sameVoice(voiceOf(reviewer), generator)) continue; // never review your own work
+    if (reviewer.proposer.review === undefined) continue; // this voice can't review — skip
+    try {
+      const draft = await reviewer.proposer.review({ system: RED_CELL_SYSTEM, user, model: reviewer.model });
+      return { verdict: draft.verdict, critique: draft.critique, voice: voiceOf(reviewer) };
+    } catch {
+      // This independent voice couldn't review (timeout, a provider safety filter, or a
+      // malformed verdict) — fall through and let the next independent voice try.
+    }
   }
+  return undefined;
 }
 
 /** Attach a review to an action (pure; returns the action unchanged when review is absent). */
