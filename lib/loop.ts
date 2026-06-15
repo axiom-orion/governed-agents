@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import {
   defaultPolicy,
   evaluatePolicy,
+  isConsequentialKind,
   type PolicyRule,
   type ProposedAction,
 } from "./governance";
@@ -49,10 +50,15 @@ export async function* runLoop(
     const reasonerStep = `${runId}:reasoner`;
     yield { type: "step_started", stepId: reasonerStep, role: "reasoner", at: now() };
     const proposed: ProposedAction = await runConsensusReasoner(task, finding, voters);
-    // Red Cell (adversarial mode): only meaningful when an instance distinct from the
-    // generator exists to run it — single-voter (offline/CI) runs are unchanged.
+    // Red Cell (adversarial mode): reserved for consequential actions — outbound sends
+    // and destructive/irreversible kinds — where an independent "make the case against
+    // it" review earns its cost. Internal records are still gated by the hard rules but
+    // skip the generative red team. Needs ≥2 voters so a distinct reviewer can exist;
+    // single-voter (offline/CI) runs are unchanged.
     const action: ProposedAction =
-      voters.length >= 2 ? withRedCell(proposed, await runRedCell(task, proposed, voters)) : proposed;
+      voters.length >= 2 && isConsequentialKind(proposed.kind)
+        ? withRedCell(proposed, await runRedCell(task, proposed, voters))
+        : proposed;
     yield {
       type: "step_completed",
       stepId: reasonerStep,
