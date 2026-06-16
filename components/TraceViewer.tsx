@@ -380,6 +380,12 @@ export function TraceViewer() {
                 Next.js · server-side agent loop · streaming NDJSON trace · policy gate before execution
               </span>
               <a
+                href="/console"
+                className="font-medium text-amber-700 underline-offset-2 hover:underline"
+              >
+                Intervention console →
+              </a>
+              <a
                 href={ARCH_DOC_URL}
                 target="_blank"
                 rel="noreferrer"
