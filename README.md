@@ -130,6 +130,39 @@ Verify your keys + model ids from the terminal before deploying:
 npm run check:providers   # pings each configured provider, prints ✓/✗ per model
 ```
 
+## The intervention console — where a human stops a bad merge
+
+The gate and the Red Cell are *automated* control. The **intervention console**
+([`/console`](http://localhost:3000/console)) is the **runtime human-in-the-loop** half —
+the place an operator sits, watches a fleet, and intervenes. Three surfaces on one page,
+pointed at the [flcason.com](https://flcason.com) genealogy reference impl:
+
+- **Cosign queue** — the first *write path* in the stack. A `REQUIRE_COSIGN`-held action
+  surfaces with full context; the operator approves or rejects; the decision routes back
+  through the enforcement plane and lands in an append-only, hash-linked **Truth Chain**.
+  The centerpiece is the **Cason↔Causey merge refusal**: two “Elias” records the matcher
+  wants to merge, and the **Maryland-detour fingerprint** that proves they’re distinct
+  lineages — a human visibly stopping a bad merge.
+- **Fleet view** — read-only: ten agents, CAR ID, BASIS tier, status, attestation method.
+- **Drift → quarantine** — two model swaps caught, each by the *right* method: **Scribe**
+  (self-hosted open weights) by weight-space **I(θ)**, and an **API-backed agent** by
+  **canary-probe** behavioral attestation. Both agents auto-quarantine.
+
+Two design commitments make it credible:
+
+- **Fail-closed.** No human ack before the TTL expires ⇒ **auto-reject** + audit. Silence is
+  refusal, not release. (Default 15m; tighter per action type.)
+- **Honest drift.** Weight-space I(θ) needs the weights, so it applies *only* to Scribe (the
+  one self-hosted open-weight agent); the nine API-backed agents are attested by
+  **canary-probe** behavioral checks, never by I(θ). The `DriftEvent` type makes the wrong
+  claim impossible to express.
+
+Simulator-first and adapter-swappable: it runs today with **zero infrastructure** and is
+safe for public exposure (synthetic, no bridge to a real agent). Flipping to the live
+CogniGate/ASTS + Supabase path is one env var (`GOVERNANCE_SOURCE`). Full write-path boundary,
+data model, and limitations: [`docs/COSIGN.md`](docs/COSIGN.md). Verified headlessly
+(42 checks, zero infra): `npm run verify:cosign`.
+
 ## Quickstart
 
 ```bash
@@ -182,14 +215,15 @@ on Vercel.
 
 ## What I'd build next
 
-- **Human-in-the-loop approval that resolves** — an approve/deny affordance on the
-  `needs_approval` state that continues the run (the third state currently parks).
+- **Human-in-the-loop approval that resolves** — _built_ as the
+  [intervention console](docs/COSIGN.md): a cosign queue where an operator approves/rejects a
+  held action and the decision routes back to the enforcement plane (fail-closed on timeout).
+- **Durable audit log** — _built_ as the hash-linked **Truth Chain** (append-only, server-only
+  writes, tamper-evident); persisted to Postgres on the live path (`supabase/`).
 - **Policy as data** — load rules/thresholds from a versioned config or small DSL,
   with per-rule provenance requirements, instead of code.
 - **An eval harness** — a labeled set of (task → expected decision) cases run in CI to
   catch policy regressions, with precision/recall on block decisions.
-- **Durable audit log** — persist every `gate_decision` (who/what/why/when) to a real
-  store, queryable and exportable, rather than living only in the stream.
 - **More gate types** — rate limits, spend caps, recipient allowlists, and
   data-residency rules, composed into named policy bundles.
 
@@ -210,6 +244,20 @@ scripts/verify-trace.ts headless contract test (CI)
 docs/ARCHITECTURE.md   data flow + full event schema
 docs/STATUS.md         current state, decisions, operational setup + open items
 examples/governed-trader/  the same gate on a trade — the canonical irreversible action
+
+# the intervention console (cosign · fleet · drift) — see docs/COSIGN.md
+app/console/page.tsx          RSC first paint → the client console
+app/_actions/cosign.ts        decideCosign Server Action (audit-before · submit · audit-after)
+app/api/governance/stream     realtime NDJSON: fleet snapshot, holds arriving, drift firing
+app/api/governance/sweep      fail-closed TTL sweeper (Vercel Cron backstop)
+governance/types.ts           Zod schemas at every boundary (BASIS tier, holds, method-aware drift)
+governance/source.ts          the adapter boundary (sim/live swappable)
+governance/sources/simulator.ts  zero-infra: scripts the Cason↔Causey hold + the Scribe I(θ) drift
+governance/sources/cognigate.ts  live CogniGate/ASTS adapter — inert until G2/G3 (no fake approvals)
+governance/audit.ts           the hash-linked Truth Chain (append-only, server-only)
+components/console/            fleet rail · cosign queue · the hold card · drift panel · audit trail
+supabase/                     migrations + RLS for the live persistence path
+scripts/verify-cosign.ts      headless: round-trip · audit chain · fail-closed · drift · Zod (CI)
 ```
 
 ## Example — the gate on the action that matters most
