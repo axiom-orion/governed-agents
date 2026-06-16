@@ -144,8 +144,9 @@ pointed at the [flcason.com](https://flcason.com) genealogy reference impl:
   wants to merge, and the **Maryland-detour fingerprint** that proves they’re distinct
   lineages — a human visibly stopping a bad merge.
 - **Fleet view** — read-only: ten agents, CAR ID, BASIS tier, status, attestation method.
-- **Drift → quarantine** — a model swap caught on **Scribe** by weight-space **I(θ)** and
-  the agent auto-quarantined.
+- **Drift → quarantine** — two model swaps caught, each by the *right* method: **Scribe**
+  (self-hosted open weights) by weight-space **I(θ)**, and an **API-backed agent** by
+  **canary-probe** behavioral attestation. Both agents auto-quarantine.
 
 Two design commitments make it credible:
 
@@ -160,7 +161,7 @@ Simulator-first and adapter-swappable: it runs today with **zero infrastructure*
 safe for public exposure (synthetic, no bridge to a real agent). Flipping to the live
 CogniGate/ASTS + Supabase path is one env var (`GOVERNANCE_SOURCE`). Full write-path boundary,
 data model, and limitations: [`docs/COSIGN.md`](docs/COSIGN.md). Verified headlessly
-(38 checks, zero infra): `npm run verify:cosign`.
+(42 checks, zero infra): `npm run verify:cosign`.
 
 ## Quickstart
 

@@ -27,12 +27,14 @@ const PRIMARY_TTL_MS = 15 * 60_000; // 15m — the high-stakes default
 const SECONDARY_TTL_MS = 90_000; // 90s — tightened for a watchable fail-closed expiry
 const HOLD_PRIMARY_DELAY_MS = 1_800;
 const HOLD_SECONDARY_DELAY_MS = 3_600;
-const DRIFT_DELAY_MS = 7_000;
+const DRIFT_WEIGHT_DELAY_MS = 7_000; // Scribe — weight-space I(θ)
+const DRIFT_CANARY_DELAY_MS = 10_500; // an API-backed agent — canary-probe behavioral
 
 // Stable ids so the decision path resolves the same hold across stateless invocations.
 const CASON_CAUSEY_HOLD_ID = "11111111-1111-4111-8111-111111111111";
 const SECONDARY_HOLD_ID = "22222222-2222-4222-8222-222222222222";
-const SCRIBE_CAR_ID = "CAR-7F3A-SCRIBE";
+const SCRIBE_CAR_ID = "CAR-7F3A-SCRIBE"; // the one self-hosted open-weight agent
+const SOURCER_CAR_ID = "CAR-1A29-SOURCER"; // an API-backed agent (canary-probe attested)
 
 function iso(offsetMs: number): string {
   return new Date(Date.now() + offsetMs).toISOString();
@@ -260,6 +262,8 @@ function buildHold(
 }
 
 // --- the drift money-shot: a model swap on Scribe, caught in weight space ----
+// Scribe is self-hosted with open weights, so a swap is caught by the subspace rotation of
+// its weight-space identity signature I(θ). Valid here and ONLY here.
 function buildScribeDrift(): DriftEvent {
   return {
     id: randomUUID(),
@@ -275,13 +279,33 @@ function buildScribeDrift(): DriftEvent {
   };
 }
 
+// --- the honest counterpart: a swap behind an API endpoint, caught behaviorally ----
+// Sourcer is API-backed — there are no weights to read, so a provider-side model swap can
+// only be caught by behavior: its response signature on a fixed canary probe battery
+// diverges from the baseline. The type forbids attaching I(θ)/degrees to this event.
+function buildSourcerDrift(): DriftEvent {
+  return {
+    id: randomUUID(),
+    agentCarId: SOURCER_CAR_ID,
+    ts: new Date().toISOString(),
+    method: "CANARY_PROBE",
+    expectedSignature: "probe-baseline ⟨0x4c…a2⟩ d≤0.15",
+    observedSignature: "⟨0xd9…07⟩ d=0.63",
+    behavioralDistance: 0.63,
+    probeCount: 96,
+    actionTaken: "QUARANTINE",
+    correlationId: `swap-${randomUUID().slice(0, 8)}`,
+  };
+}
+
 export class SimulatorSource implements GovernanceSource {
   // Seed holds resolvable by id across invocations; an overlay records decisions made
   // in *this* warm instance so reads reflect them.
   readonly #seeds: ReadonlyMap<string, CosignRequest>;
   readonly #decided = new Map<string, { status: CosignRequest["status"]; by: string | null; at: string }>();
   readonly #fleet: AgentState[];
-  #scribeQuarantined = false;
+  // carId → the lastAction shown once an agent has been quarantined by a drift signal.
+  readonly #quarantined = new Map<string, string>();
 
   constructor() {
     const primary = buildHold(
@@ -321,11 +345,10 @@ export class SimulatorSource implements GovernanceSource {
   }
 
   async getFleet(): Promise<AgentState[]> {
-    return this.#fleet.map((a) =>
-      a.carId === SCRIBE_CAR_ID && this.#scribeQuarantined
-        ? { ...a, status: "QUARANTINED", lastAction: "Quarantined — I(θ) divergence 14.7° (model-swap signature)" }
-        : a,
-    );
+    return this.#fleet.map((a) => {
+      const reason = this.#quarantined.get(a.carId);
+      return reason ? { ...a, status: "QUARANTINED", lastAction: reason } : a;
+    });
   }
 
   async listPendingHolds(): Promise<CosignRequest[]> {
@@ -357,11 +380,29 @@ export class SimulatorSource implements GovernanceSource {
   }
 
   watchDrift(onDrift: (e: DriftEvent) => void): Unsubscribe {
-    const timer = setTimeout(() => {
-      this.#scribeQuarantined = true;
-      onDrift(buildScribeDrift());
-    }, DRIFT_DELAY_MS);
-    return () => clearTimeout(timer);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const fire = (build: () => DriftEvent, reason: string, delay: number): void => {
+      timers.push(
+        setTimeout(() => {
+          const event = build();
+          this.#quarantined.set(event.agentCarId, reason);
+          onDrift(event);
+        }, delay),
+      );
+    };
+    // Both attestation paths fire: weight-space I(θ) on the open-weight agent, then
+    // canary-probe behavioral attestation on an API-backed agent.
+    fire(
+      buildScribeDrift,
+      "Quarantined — I(θ) divergence 14.7° (weight-space model-swap signature)",
+      DRIFT_WEIGHT_DELAY_MS,
+    );
+    fire(
+      buildSourcerDrift,
+      "Quarantined — canary-probe behavioral drift d=0.63 (provider model-swap signature)",
+      DRIFT_CANARY_DELAY_MS,
+    );
+    return () => timers.forEach(clearTimeout);
   }
 
   async submitDecision(requestId: string, decision: CosignDecision, actor: string): Promise<SubmitResult> {

@@ -326,7 +326,7 @@ Hand-rolled Tailwind (matching the existing system) over shadcn; `zod` + `server
   consumes and renders a signal only; simulator values are synthetic and labeled. No
   private-plane references.
 
-**Verification:** `npm run verify:cosign` (38 checks, zero infra) — round-trip (Cason↔Causey
+**Verification:** `npm run verify:cosign` (42 checks, zero infra) — round-trip (Cason↔Causey
 reject → agent proceeds without merge), audit chain verifies + tamper breaks it, fail-closed
 sweep, drift→quarantine with method discrimination, Zod rejects malformed payloads, inert live
 adapter never fabricates an approval. Wired into CI. `npm run build` green (server-only keeps

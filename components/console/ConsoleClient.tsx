@@ -32,7 +32,7 @@ export function ConsoleClient({ initialFleet, initialHolds }: ConsoleClientProps
 
   const [fleet, setFleet] = useState<readonly AgentState[]>(initialFleet);
   const [holds, setHolds] = useState<readonly CosignRequest[]>(initialHolds);
-  const [drift, setDrift] = useState<DriftEvent | null>(null);
+  const [drifts, setDrifts] = useState<readonly DriftEvent[]>([]);
   const [audit, setAudit] = useState<readonly AuditRow[]>([]);
   const cursor = useRef(0);
 
@@ -41,7 +41,7 @@ export function ConsoleClient({ initialFleet, initialHolds }: ConsoleClientProps
     cursor.current = 0;
     setFleet(initialFleet);
     setHolds(initialHolds);
-    setDrift(null);
+    setDrifts([]);
     setAudit([]);
   }, [nonce, initialFleet, initialHolds]);
 
@@ -67,12 +67,14 @@ export function ConsoleClient({ initialFleet, initialHolds }: ConsoleClientProps
         case "agent_update":
           setFleet((prev) => prev.map((a) => (a.carId === ev.agent.carId ? ev.agent : a)));
           break;
-        case "drift":
-          setDrift(ev.event);
+        case "drift": {
+          const driftEvent = ev.event;
+          setDrifts((prev) => (prev.some((d) => d.id === driftEvent.id) ? prev : [...prev, driftEvent]));
           setFleet((prev) =>
-            prev.map((a) => (a.carId === ev.event.agentCarId ? { ...a, status: "QUARANTINED" } : a)),
+            prev.map((a) => (a.carId === driftEvent.agentCarId ? { ...a, status: "QUARANTINED" } : a)),
           );
           break;
+        }
         case "heartbeat":
           break;
       }
@@ -137,7 +139,9 @@ export function ConsoleClient({ initialFleet, initialHolds }: ConsoleClientProps
           <FleetRail agents={fleet} />
         </aside>
         <div className="flex min-w-0 flex-1 flex-col gap-5">
-          {drift ? <DriftPanel event={drift} /> : null}
+          {drifts.map((d) => (
+            <DriftPanel key={d.id} event={d} />
+          ))}
           <CosignQueue holds={holds} connection={connection} onResolved={onResolved} />
           <AuditTrail rows={audit} />
           {skipped > 0 ? (

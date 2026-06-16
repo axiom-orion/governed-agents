@@ -74,8 +74,13 @@ divergence on a fixed probe battery), never by I(θ).
 This is enforced in the type system, not just the copy: `DriftEvent` is a discriminated
 union on `method`. A `WEIGHT_SPACE_ITHETA` event carries `divergenceDeg`; a `CANARY_PROBE`
 event carries `behavioralDistance`/`probeCount`. **A canary event cannot assert degrees, and
-a weight-space claim cannot attach to an API-backed agent.** The scripted money-shot fires on
-Scribe, weight-space — so "I(θ) caught a model swap" is a true statement.
+a weight-space claim cannot attach to an API-backed agent.**
+
+The simulator fires **both** so the distinction is concrete on screen: a weight-space I(θ)
+drift on Scribe (the money-shot — "I(θ) caught a model swap" is literally true), then a
+canary-probe drift on an API-backed agent (a provider-side swap caught behaviorally, since
+there are no weights to read). Both auto-quarantine; each is tagged with the method that is
+actually valid for that agent.
 
 ## Public-tier-clean
 
@@ -112,7 +117,7 @@ console footer and here, not papered over.
 ## Verify it
 
 ```bash
-npm run verify:cosign   # 38 checks, zero infra: round-trip · audit chain · tamper · fail-closed · drift · Zod · honesty
+npm run verify:cosign   # 42 checks, zero infra: round-trip · audit chain · tamper · fail-closed · drift · Zod · honesty
 npm run build           # server/client boundaries; server-only keeps the decision path off the client
 ```
 

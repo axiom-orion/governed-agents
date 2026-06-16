@@ -135,56 +135,64 @@ async function main(): Promise<void> {
   const timeoutChain = await getAuditStore().all();
   check("fail-closed: the auto-reject is recorded in the Truth Chain", timeoutChain[0]?.eventType === "COSIGN_TIMEOUT" && verifyChain(timeoutChain).ok);
 
-  // ============ 4) drift → quarantine, with honest method discrimination ==========
+  // ============ 4) drift → quarantine, both attestation paths fire ================
   resetSource();
   const driftSim = new SimulatorSource();
-  let captured: DriftEvent | undefined;
-  const unsub = driftSim.watchDrift((e) => {
-    captured = e;
-  });
-  // wait out the scripted drift delay
-  await new Promise((r) => setTimeout(r, 7_500));
+  const captured: DriftEvent[] = [];
+  const unsub = driftSim.watchDrift((e) => captured.push(e));
+  // wait out both scripted drifts (weight-space at 7s, canary-probe at 10.5s)
+  await new Promise((r) => setTimeout(r, 11_500));
   unsub();
-  check("drift: the scripted event fired", captured !== undefined);
-  check("drift: it fired on Scribe", captured?.agentCarId === "CAR-7F3A-SCRIBE");
+  check("drift: both scripted events fired", captured.length === 2);
+
+  const weightEv = captured.find((e) => e.method === "WEIGHT_SPACE_ITHETA");
+  const canaryEv = captured.find((e) => e.method === "CANARY_PROBE");
+
+  // 4a) weight-space on the one self-hosted open-weight agent (the money-shot)
   check(
-    "drift: Scribe is attested by weight-space I(θ) (valid — self-hosted open weights)",
-    captured?.method === "WEIGHT_SPACE_ITHETA",
+    "drift: a weight-space I(θ) event fired on Scribe (self-hosted open weights)",
+    weightEv?.agentCarId === "CAR-7F3A-SCRIBE",
   );
   check(
-    "drift: the event carries a subspace-rotation divergence in degrees",
-    captured?.method === "WEIGHT_SPACE_ITHETA" && captured.divergenceDeg > 0,
+    "drift: the weight-space event carries a subspace-rotation divergence in degrees",
+    weightEv?.method === "WEIGHT_SPACE_ITHETA" && weightEv.divergenceDeg > 0,
   );
-  check("drift: the action taken is QUARANTINE", captured?.actionTaken === "QUARANTINE");
+  check("drift: the weight-space event validates against its variant", WeightSpaceDrift.safeParse(weightEv).success);
+
+  // 4b) canary-probe on an API-backed agent — the honest counterpart (no weights to read)
+  check(
+    "drift: a canary-probe event fired on an API-backed agent (not Scribe)",
+    canaryEv !== undefined && canaryEv.agentCarId !== "CAR-7F3A-SCRIBE",
+  );
+  check(
+    "drift: the canary event carries a behavioral distance + probe count, never degrees",
+    canaryEv !== undefined &&
+      canaryEv.method === "CANARY_PROBE" &&
+      canaryEv.behavioralDistance > 0 &&
+      canaryEv.probeCount > 0 &&
+      !("divergenceDeg" in canaryEv),
+  );
+  check("drift: the canary event validates against its variant", CanaryProbeDrift.safeParse(canaryEv).success);
+  check(
+    "drift: both events' action taken is QUARANTINE",
+    weightEv?.actionTaken === "QUARANTINE" && canaryEv?.actionTaken === "QUARANTINE",
+  );
+
+  // both agents flip to QUARANTINED, each tagged with its own (correct) attestation method
   const fleetAfter = await driftSim.getFleet();
   const scribe = fleetAfter.find((a) => a.carId === "CAR-7F3A-SCRIBE");
-  check("drift: the fleet view flips Scribe to QUARANTINED", scribe?.status === "QUARANTINED");
+  check("drift: the fleet flips the weight-space agent (Scribe) to QUARANTINED", scribe?.status === "QUARANTINED");
+  check("drift: the weight-space agent's attestation is WEIGHT_SPACE_ITHETA", scribe?.attestation === "WEIGHT_SPACE_ITHETA");
+  const canaryAgent = canaryEv ? fleetAfter.find((a) => a.carId === canaryEv.agentCarId) : undefined;
+  check("drift: the fleet flips the canary-probe agent to QUARANTINED", canaryAgent?.status === "QUARANTINED");
+  check("drift: the canary-probe agent's attestation is CANARY_PROBE (no weight access)", canaryAgent?.attestation === "CANARY_PROBE");
 
-  // the honesty fix, enforced by the type system: an API-backed agent can only be a
-  // canary-probe drift, which carries a behavioral distance — never I(θ) degrees.
-  const fleet = await driftSim.getFleet();
-  const apiAgents = fleet.filter((a) => a.attestation === "CANARY_PROBE");
-  check("fleet: nine API-backed agents are attested by canary-probe, not I(θ)", apiAgents.length === 9);
+  // the honesty invariant: exactly one weight-fingerprintable agent; the rest canary-probe
+  check("fleet: nine API-backed agents are attested by canary-probe, not I(θ)", fleetAfter.filter((a) => a.attestation === "CANARY_PROBE").length === 9);
   check(
     "fleet: exactly one self-hosted open-weight agent is fingerprintable in weight space",
-    fleet.filter((a) => a.attestation === "WEIGHT_SPACE_ITHETA").length === 1,
+    fleetAfter.filter((a) => a.attestation === "WEIGHT_SPACE_ITHETA").length === 1,
   );
-  // a canary-probe drift parses against its variant and has NO degrees field
-  const canary = CanaryProbeDrift.safeParse({
-    id: "33333333-3333-4333-8333-333333333333",
-    agentCarId: "CAR-2B11-MATCHER",
-    ts: new Date().toISOString(),
-    method: "CANARY_PROBE",
-    expectedSignature: "probe-baseline ⟨h0⟩",
-    observedSignature: "⟨h1⟩",
-    behavioralDistance: 0.42,
-    probeCount: 64,
-    actionTaken: "QUARANTINE",
-    correlationId: "swap-canary",
-  });
-  check("drift: a canary-probe event validates and carries a behavioral distance, not degrees", canary.success && !("divergenceDeg" in canary.data));
-  const weight = WeightSpaceDrift.safeParse({ ...((captured ?? {}) as object) });
-  check("drift: the weight-space event validates against its variant", weight.success);
 
   // ============ 5) Zod rejects malformed boundary payloads ========================
   check("zod: a CosignRequest missing required fields is rejected", !CosignRequest.safeParse({ id: "not-a-uuid" }).success);
