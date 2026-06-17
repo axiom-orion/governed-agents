@@ -291,3 +291,73 @@ the offline demo contract still holds; new scenarios are recorded Sample fixture
 **Open / deliberately deferred:** the demo GIF + 90-second video are placeholders in the
 README (can't be captured here); the `needs_approval` state parks the run (an
 approve-to-continue affordance is in "What I'd build next").
+
+---
+
+## 11. Intervention console — cosign · fleet · drift (new surface)
+
+The presentation/interaction plane's **control half**: the runtime human-in-the-loop surface
+at `/console`, scoped to the flcason.com genealogy reference impl. Where the trace UI is
+read-only, this introduces the first **write path** (a human decision releasing/rejecting a
+held action). Built on the simulator (zero-infra, default, public-safe), adapter-swappable to
+the live CogniGate/ASTS + Supabase path via `GOVERNANCE_SOURCE`.
+
+| Piece | Landed | Key files |
+|---|---|---|
+| **Types (Zod at every boundary)** | ✅ | `governance/types.ts` — BASIS tier, CAR ID, cosign request, **method-discriminated** `DriftEvent`, audit, stream events |
+| **Adapter boundary + registry** | ✅ | `governance/source.ts`, `governance/registry.ts` (env switch), `governance/sources/{simulator,cognigate}.ts` |
+| **Audit (Truth Chain)** | ✅ | `governance/audit.ts` — `sha256(prev‖canonical(row))`, append-only, `server-only`, `verifyChain()` |
+| **Decision write path** | ✅ | `app/_actions/cosign.ts` — audit-before · adapter submit · audit-after; client never touches the adapter/key |
+| **Realtime + fail-closed cron** | ✅ | `app/api/governance/stream` (NDJSON), `app/api/governance/sweep` (Vercel Cron), `lib/governance-stream.ts` (Zod-validated client consumer) |
+| **The three surfaces** | ✅ | `components/console/*` — fleet rail, cosign queue, the hold card (Cason↔Causey + Maryland-detour evidence + draining TTL), drift panel, audit trail |
+| **Live persistence artifact** | ✅ | `supabase/migrations/0001_*.sql` + RLS (anon SELECT only; audit UPDATE/DELETE revoked; Realtime on `cosign_requests`) |
+
+**Decisions owned:** subsume a minimal fleet view (G1 default — no #8 observability dashboard
+in this repo); simulator default for public exposure; env single-operator auth (`auth/operator.ts`);
+fail-closed auto-REJECT @ 15m default; append-only hash chain flagged tamper-evident-not-proof.
+Hand-rolled Tailwind (matching the existing system) over shadcn; `zod` + `server-only` added.
+
+**Two load-bearing corrections baked in:**
+- **Drift honesty.** Weight-space I(θ) applies *only* to Scribe (the one self-hosted
+  open-weight agent); the nine API-backed agents are attested by canary-probe. The
+  `DriftEvent` discriminated union makes "I(θ) on an API agent" unrepresentable. The money-shot
+  fires on Scribe, so the claim is true.
+- **Public-tier-clean.** No I(θ) math/aggregation/calibration in the repo — the adapter
+  consumes and renders a signal only; simulator values are synthetic and labeled. No
+  private-plane references.
+
+**Verification:** `npm run verify:cosign` (42 checks, zero infra) — round-trip (Cason↔Causey
+reject → agent proceeds without merge), audit chain verifies + tamper breaks it, fail-closed
+sweep, drift→quarantine with method discrimination, Zod rejects malformed payloads, inert live
+adapter never fabricates an approval. Wired into CI. `npm run build` green (server-only keeps
+the decision path off the client bundle). Runtime-smoked: the stream delivers fleet → both
+holds → Scribe drift → quarantine in order.
+
+---
+
+## 12. Live path wired — Supabase is the seam
+
+`GOVERNANCE_SOURCE=cognigate` is no longer an inert stub; it reads/writes a real Supabase
+project. **Supabase is the seam**: the public console only talks to Supabase, the private
+CogniGate/ASTS side reads/writes the same four tables — so no CogniGate endpoint and no I(θ)
+internals enter this public repo.
+
+| Piece | Landed | Notes |
+|---|---|---|
+| Supabase client + mappers | ✅ | `governance/supabase.ts` — server-only; snake_case→camelCase, ts/number normalized for PostgREST, every row Zod-validated; `SupabaseAuditStore` (append-only) |
+| Live adapter | ✅ | `governance/sources/cognigate.ts` — reads + Realtime + `submitDecision` + `sweepExpired`; inert (`cognigate-not-configured`) if env unset — never a fake approval |
+| `listRecentDrift` | ✅ | new boundary method so an already-quarantined agent shows its drift detail on first paint (sim returns []) |
+| Registry | ✅ | cognigate mode swaps in the Supabase audit store synchronously |
+| Schema + seed | ✅ | `supabase/migrations/0001` (+ `seq`, drift_events realtime); `supabase/seed.sql` (synthetic genealogy fleet/holds/drift) |
+| Provisioned | ✅ | dedicated project under the Vorion org (us-east-1, $10/mo), migrated + seeded (10 agents · 2 holds · 2 drift) |
+
+**Verified live** (anon key, real Postgres): reads map + Zod-validate (10 agents, both holds
+with the Maryland evidence, both drift methods); RLS denies anon UPDATE/INSERT and blinds anon
+to `audit_events` (`42501`); `service_role` has INSERT/SELECT but **no UPDATE/DELETE** on
+`audit_events` (append-only at the grant level). Build green; verify:cosign 42/42; existing
+gates unchanged (governance 42, trace 70). The service-role key isn't committed — set it in
+Vercel/`.env.local` from the dashboard to enable the live write path. Default deploy stays on
+the simulator (free, public-safe).
+
+**Still private-plane (out of repo):** G2 (CogniGate parks/consumes via the tables) and G3
+(ASTS writes fleet/drift via the tables).

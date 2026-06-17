@@ -27,6 +27,26 @@ export interface ProposedAction {
   readonly provenance: readonly Provenance[];
   /** Present when the action was decided by a multi-model vote (the triad). */
   readonly consensus?: Consensus;
+  /** Attested identity of the model instance whose draft was chosen (the generator). */
+  readonly proposedBy?: VoiceIdentity;
+  /** Present when an independent adversarial reviewer (the Red Cell) examined the action. */
+  readonly redCell?: RedCellReview;
+}
+
+/**
+ * The attested identity of one model instance — the unit "independence" is counted in.
+ * For API-backed voices this is the configured (provider, model id) pair: it attests what
+ * we *configured and called*, and deliberately claims no more — it cannot see through a
+ * provider's internal routing (that residual trust is named in the docs, not papered over).
+ */
+export interface VoiceIdentity {
+  readonly provider: string; // proposer label, e.g. "anthropic" | "gemini" | "grok" | "offline-stub"
+  readonly model: string; // the model id the call was made with
+}
+
+/** Two voices are the same instance when provider and model id both match. */
+export function sameVoice(a: VoiceIdentity, b: VoiceIdentity): boolean {
+  return a.provider === b.provider && a.model === b.model;
 }
 
 /** One model's vote in a multi-model action proposal. */
@@ -36,6 +56,8 @@ export interface ModelVote {
   readonly justification: string;
   /** True when the provider was unavailable (no key) or its call failed. */
   readonly abstained?: boolean;
+  /** Attested identity of the instance that cast this vote (absent on legacy traces). */
+  readonly voice?: VoiceIdentity;
 }
 
 /** Outcome of aggregating the triad's votes for one action. */
@@ -45,6 +67,17 @@ export interface Consensus {
   readonly agreementRatio: number;
   /** The action kind the participating models most agreed on. */
   readonly chosenKind: string;
+  /** Distinct attested voices among the votes that backed the chosen kind (absent on legacy traces). */
+  readonly distinctVoices?: number;
+}
+
+/** The Red Cell's adversarial verdict on a proposed action. */
+export interface RedCellReview {
+  /** "object" = the strongest case against the action stands; route to a human. */
+  readonly verdict: "concur" | "object";
+  readonly critique: string;
+  /** Attested identity of the reviewing instance — compared against `proposedBy`. */
+  readonly voice: VoiceIdentity;
 }
 
 // Three-tier outcome: a clean action is allowed; a hard violation blocks; a
@@ -102,6 +135,8 @@ export interface PolicyConfig {
   readonly externalSendThreshold?: number;
   /** Min agreement among the triad (in [0,1]) before acting; default 1.0 (unanimous). */
   readonly consensusThreshold?: number;
+  /** Min distinct attested model instances behind a consensus; default 2. */
+  readonly minDistinctVoices?: number;
 }
 
 export const requireProvenance: PolicyRule = {
@@ -178,6 +213,17 @@ export const DESTRUCTIVE_KINDS: ReadonlySet<string> = new Set([
   "overwrite",
 ]);
 
+/**
+ * Actions consequential enough to warrant adversarial (Red Cell) review: outbound
+ * sends and irreversible/destructive kinds. Internal records are still gated by the
+ * hard rules — provenance, PII, consensus, distinct voices — but running a
+ * "never rubber-stamp" generative red team on every internal note manufactures
+ * objections without protecting anything. Scrutiny escalates with the stakes.
+ */
+export function isConsequentialKind(kind: string): boolean {
+  return kind === "send_email" || DESTRUCTIVE_KINDS.has(kind);
+}
+
 function isApproved(payload: Readonly<Record<string, unknown>>): boolean {
   return payload.approved === true || typeof payload.approvalToken === "string";
 }
@@ -230,6 +276,102 @@ export function makeRequireModelConsensus(
   };
 }
 
+// --- attested independence (§7-2): voices are counted, not assumed ----------
+
+/** Default minimum number of distinct model instances that must back a consensus. */
+export const DEFAULT_MIN_DISTINCT_VOICES = 2;
+
+/** Stable identity key for a vote — attested voice when present, else the legacy label. */
+function voiceKey(v: ModelVote): string {
+  return v.voice ? `${v.voice.provider}::${v.voice.model}` : `label::${v.model}`;
+}
+
+/** Distinct voices among participating votes that backed `kind` (pure; legacy-tolerant). */
+export function distinctVoicesFor(votes: readonly ModelVote[], kind: string): number {
+  const keys = new Set<string>();
+  for (const v of votes) {
+    if (v.abstained !== true && v.kind === kind) keys.add(voiceKey(v));
+  }
+  return keys.size;
+}
+
+/**
+ * The bloodhound law applied at the model layer: corroboration counts independent
+ * VOICES, not the votes that echo them. A unanimous "consensus" whose agreeing votes
+ * resolve to one attested instance is one voice echoed N times — it is routed to a
+ * human, not honored. Within the default triad (anthropic/gemini/grok) this is an
+ * invariant check; it bites when voter sets are user-configured or when a recorded
+ * consensus is replayed through the policy.
+ */
+export function makeRequireDistinctVoices(
+  minDistinctVoices: number = DEFAULT_MIN_DISTINCT_VOICES,
+): PolicyRule {
+  return {
+    name: "require-distinct-voices",
+    evaluate: (a) => {
+      const consensus = a.consensus;
+      if (consensus === undefined) return null;
+      const participating = consensus.votes.filter((v) => v.abstained !== true).length;
+      if (participating < 2) return null; // a single voter is not claiming corroboration
+      const distinct =
+        consensus.distinctVoices ?? distinctVoicesFor(consensus.votes, consensus.chosenKind);
+      const agreeing = consensus.votes.filter(
+        (v) => v.abstained !== true && v.kind === consensus.chosenKind,
+      ).length;
+      return distinct < minDistinctVoices
+        ? {
+            rule: "require-distinct-voices",
+            detail: `${agreeing} agreeing vote(s) resolve to ${distinct} distinct model instance(s) — corroboration counts voices, not echoes (need ≥ ${minDistinctVoices})`,
+            severity: "review",
+          }
+        : null;
+    },
+  };
+}
+
+/**
+ * Oversight is theater unless the reviewer is provably not the generator. A Red Cell
+ * verdict is honored only when the reviewing instance's attested voice differs from the
+ * proposing instance's; an unattested generator can't prove independence, so it routes
+ * to a human too — unverifiable is not verified.
+ */
+export const redCellMustBeIndependent: PolicyRule = {
+  name: "red-cell-independence",
+  evaluate: (a) => {
+    if (a.redCell === undefined) return null;
+    if (a.proposedBy === undefined) {
+      return {
+        rule: "red-cell-independence",
+        detail:
+          "red-cell verdict cannot be honored: the proposing model's identity is not attested",
+        severity: "review",
+      };
+    }
+    return sameVoice(a.redCell.voice, a.proposedBy)
+      ? {
+          rule: "red-cell-independence",
+          detail: `oversight is theater — the red cell resolved to the proposing instance (${a.proposedBy.provider}/${a.proposedBy.model}); its verdict is not honored`,
+          severity: "review",
+        }
+      : null;
+  },
+};
+
+/** An adversarial objection routes the action to a human with the critique attached. */
+export const redCellObjection: PolicyRule = {
+  name: "red-cell-objection",
+  evaluate: (a) => {
+    if (a.redCell === undefined || a.redCell.verdict !== "object") return null;
+    const critique =
+      a.redCell.critique.length > 220 ? `${a.redCell.critique.slice(0, 220)}…` : a.redCell.critique;
+    return {
+      rule: "red-cell-objection",
+      detail: `the red cell (${a.redCell.voice.provider}/${a.redCell.voice.model}) objects: ${critique}`,
+      severity: "review",
+    };
+  },
+};
+
 /** Assemble the active policy from a config; rule order is stable. */
 export function buildPolicy(config: PolicyConfig = {}): readonly PolicyRule[] {
   return [
@@ -238,6 +380,9 @@ export function buildPolicy(config: PolicyConfig = {}): readonly PolicyRule[] {
     noPiiInExternalOutput,
     destructiveNeedsApproval,
     makeRequireModelConsensus(config.consensusThreshold),
+    makeRequireDistinctVoices(config.minDistinctVoices),
+    redCellMustBeIndependent,
+    redCellObjection,
   ];
 }
 

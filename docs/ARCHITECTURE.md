@@ -120,9 +120,32 @@ Thresholds are explicit:
 | `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data (SSN / card / phone) |
 | `destructive-action-needs-approval` | `delete_record` / destructive kinds | **needs-approval** unless an approval token is attached |
 | `require-model-consensus` | multi-model (triad) runs | **needs-approval** when model agreement falls below the threshold (default **100%**, unanimous) |
+| `require-distinct-voices` | multi-model (triad) runs | **needs-approval** when agreeing votes resolve to < 2 distinct attested instances (`minDistinctVoices`) |
+| `red-cell-independence` | red-cell-reviewed actions | **needs-approval** when reviewer ≡ generator, or the generator is unattested |
+| `red-cell-objection` | red-cell-reviewed actions | **needs-approval** when the adversarial reviewer objects (critique attached) |
 
 The third state (`needs_approval`) models human-in-the-loop: the run parks at an
 **Awaiting approval** node instead of executing or hard-failing.
+
+### Attested voices + the Red Cell
+
+Every `ModelVote` carries a `voice: { provider, model }` — the attested identity the
+vote was cast under — and `Consensus.distinctVoices` counts the distinct instances
+behind the chosen kind; `ProposedAction.proposedBy` attests the generator. After the
+Reasoner, on **consequential actions only** (outbound sends + destructive kinds —
+internal records are gated by the hard rules but skip the generative red team),
+`lib/redcell.ts` runs an adversarial review: it tries each independent (non-generator)
+review-capable voice **in order** and attaches the first verdict as
+`redCell: { verdict, critique, voice }`, so a reviewer that fails (timeout, a provider
+safety filter rejecting the adversarial prompt) falls through to the next rather than
+dropping oversight. The three rules above make independence *checked*, not assumed.
+All additive/optional — legacy traces parse unchanged, and `distinctVoices` falls back
+to provider labels when voices are absent. Scope honesty: a voice attests the
+configured `(provider, model id)` that was called; it cannot attest a provider's
+internal routing. Headless verification: `npx tsx scripts/verify-governance.ts`
+(42 checks: echo-collapse + voice-collapse review, objection routing, the reviewer
+fallback chain, the consequential-only scope, plus deterministic offline two-voter
+loop runs end to end).
 
 ### Model consensus (the triad)
 

@@ -33,10 +33,34 @@ export interface ProposeInput {
   readonly model: string;
 }
 
+/** The Red Cell's structured verdict, before its voice identity is attached. */
+export interface RedCellDraft {
+  readonly verdict: "concur" | "object";
+  readonly critique: string;
+}
+
+export function parseRedCellDraft(input: unknown): RedCellDraft {
+  if (typeof input !== "object" || input === null) {
+    throw new Error("red_cell_review returned a non-object input");
+  }
+  const rec = input as Record<string, unknown>;
+  const verdict = rec.verdict;
+  if (verdict !== "concur" && verdict !== "object") {
+    throw new Error(`red_cell_review returned an invalid verdict: ${String(verdict)}`);
+  }
+  const critique =
+    typeof rec.critique === "string" && rec.critique.length > 0
+      ? rec.critique
+      : "(no critique provided)";
+  return { verdict, critique };
+}
+
 /** Anything that can propose a structured action — the unit the triad votes with. */
 export interface ActionProposer {
   readonly label: string;
   proposeAction(input: ProposeInput): Promise<ActionDraft>;
+  /** Optional adversarial-review capability — present on voices the Red Cell can run on. */
+  review?(input: ProposeInput): Promise<RedCellDraft>;
 }
 
 export interface ModelClient extends ActionProposer {
@@ -76,6 +100,28 @@ const PROPOSE_ACTION_TOOL: Anthropic.Tool = {
       },
     },
     required: ["kind", "justification"],
+    additionalProperties: false,
+  },
+};
+
+const RED_CELL_TOOL: Anthropic.Tool = {
+  name: "red_cell_review",
+  description:
+    "Deliver the Red Cell's adversarial verdict on the proposed action: concur (no case against it stands) or object (the case against it stands), with the critique.",
+  input_schema: {
+    type: "object",
+    properties: {
+      verdict: {
+        type: "string",
+        enum: ["concur", "object"],
+        description: "object when the strongest case against the action stands.",
+      },
+      critique: {
+        type: "string",
+        description: "The strongest case against the action, in 1-3 sentences.",
+      },
+    },
+    required: ["verdict", "critique"],
     additionalProperties: false,
   },
 };
@@ -157,6 +203,27 @@ class AnthropicModelClient implements ModelClient {
     }
     return parseActionDraft(toolUse.input);
   }
+
+  public async review(input: ProposeInput): Promise<RedCellDraft> {
+    const message = await this.client.messages.create({
+      model: input.model,
+      max_tokens: 1024,
+      system: [{ type: "text", text: input.system, cache_control: { type: "ephemeral" } }],
+      tools: [RED_CELL_TOOL],
+      tool_choice: { type: "tool", name: RED_CELL_TOOL.name },
+      messages: [{ role: "user", content: input.user }],
+    });
+    if (isRefusal(message.stop_reason)) {
+      throw new Error("model refused the request (stop_reason=refusal)");
+    }
+    const toolUse = message.content.find(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+    );
+    if (toolUse === undefined) {
+      throw new Error("model did not return a red_cell_review tool call");
+    }
+    return parseRedCellDraft(toolUse.input);
+  }
 }
 
 function extractEmail(text: string): string | undefined {
@@ -192,12 +259,39 @@ class OfflineModelClient implements ModelClient {
       justification: "The task requests an internal record of the findings.",
     };
   }
+
+  // Deterministic adversarial stub: objects when the material under review admits it is
+  // unverified/uncorroborated, concurs otherwise — so the red-cell path is exercisable
+  // offline (and in CI) with zero keys, like everything else in this client.
+  public async review(input: ProposeInput): Promise<RedCellDraft> {
+    const text = input.user.toLowerCase();
+    if (/\bunverified\b|\buncorroborated\b|\bsingle source\b/u.test(text)) {
+      return {
+        verdict: "object",
+        critique:
+          "[offline] The action rests on unverified/single-source material; the strongest case against it stands until a second independent source corroborates it.",
+      };
+    }
+    return {
+      verdict: "concur",
+      critique: "[offline] No case against the action stands on the available material.",
+    };
+  }
 }
 
 /** True when the loop will use the deterministic offline stub instead of a live model. */
 export function isOffline(): boolean {
   const key = process.env.ANTHROPIC_API_KEY?.trim();
   return process.env.AGENTS_OFFLINE === "1" || key === undefined || key.length === 0;
+}
+
+/**
+ * The deterministic offline stub, directly. Exists so verification scripts can build
+ * multi-voter fixtures (two stubs under different model ids are attested-distinct by
+ * construction) without depending on env state.
+ */
+export function createOfflineModelClient(): ModelClient {
+  return new OfflineModelClient();
 }
 
 export function createModelClient(): ModelClient {
