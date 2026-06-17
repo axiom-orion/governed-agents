@@ -210,8 +210,8 @@ async function main(): Promise<void> {
   const live = new CogniGateSource();
   const liveDecision = await live.submitDecision(CASON_CAUSEY_HOLD_ID, "REJECT", "operator");
   check(
-    "honesty: the inert live adapter returns ok:false / cognigate-not-wired (never a fake approval)",
-    !liveDecision.ok && liveDecision.reason === "cognigate-not-wired",
+    "honesty: the unconfigured live adapter returns ok:false / cognigate-not-configured (never a fake approval)",
+    !liveDecision.ok && liveDecision.reason === "cognigate-not-configured",
   );
   check("honesty: the inert live adapter exposes no fleet/holds", (await live.getFleet()).length === 0 && (await live.listPendingHolds()).length === 0);
 

@@ -11,6 +11,8 @@
 import type { GovernanceSource } from "./source";
 import { SimulatorSource } from "./sources/simulator";
 import { CogniGateSource } from "./sources/cognigate";
+import { setAuditStore } from "./audit";
+import { getSupabaseAdmin, SupabaseAuditStore } from "./supabase";
 
 export type GovernanceSourceKind = "simulator" | "cognigate";
 
@@ -22,7 +24,16 @@ let cached: GovernanceSource | undefined;
 
 export function getSource(): GovernanceSource {
   if (cached) return cached;
-  cached = governanceSourceKind() === "cognigate" ? new CogniGateSource() : new SimulatorSource();
+  if (governanceSourceKind() === "cognigate") {
+    cached = new CogniGateSource();
+    // On the live path the Truth Chain persists to Postgres. Wired synchronously so the
+    // Server Action's appendAudit hits Supabase, not the in-memory store. Falls back to the
+    // in-memory store if Supabase isn't configured (the source is inert in that case anyway).
+    const db = getSupabaseAdmin();
+    if (db) setAuditStore(new SupabaseAuditStore(db));
+  } else {
+    cached = new SimulatorSource();
+  }
   return cached;
 }
 

@@ -1,62 +1,151 @@
 // governance/sources/cognigate.ts
-// The live adapter to the real enforcement plane: CogniGate's REQUIRE_COSIGN path (the
-// PEP that holds actions and consumes decisions) and the ASTS v1.0 sink (queryable fleet
-// state + the I(θ) divergence signal). It persists holds/decisions/audit to Supabase and
-// subscribes to Supabase Realtime for live arrival.
+// The live GovernanceSource for GOVERNANCE_SOURCE=cognigate. Supabase is the seam: this
+// adapter reads/writes the four governance tables; the private CogniGate REQUIRE_COSIGN
+// consumer and the ASTS sink read/write the SAME tables on their side. That keeps every
+// CogniGate endpoint and all I(θ) internals OUT of this public repo — the adapter only ever
+// moves rows that match the public contract, and only ever consumes the divergence signal.
 //
-// G2/G3 are prerequisites this task does not own:
-//   G2 — CogniGate must emit hold events and consume decisions (submitDecision needs a
-//        real target). Until then this adapter is INERT.
-//   G3 — the ASTS sink must emit queryable fleet state + I(θ) drift. Until then there is
-//        no live fleet/drift.
-//
-// Honesty rule (load-bearing): while inert, submitDecision returns
-// { ok: false, reason: "cognigate-not-wired" } — it NEVER fabricates an { ok: true }
-// against a target that isn't there, and reads return empty rather than invented state.
-// Flipping this on is wiring, not new design: implement the marked sections against the
-// Supabase client + the CogniGate/ASTS endpoints, set GOVERNANCE_SOURCE=cognigate.
-//
-// Public-tier note: this adapter only ever CONSUMES the I(θ) divergence signal that ASTS
-// emits. The weight-space computation, aggregation, and threshold calibration are not here
-// and must not be added here — they belong to the private plane.
+// Honesty is preserved two ways:
+//   * If Supabase is not configured, the adapter is inert — reads return empty and
+//     submitDecision returns { ok:false, reason:"cognigate-not-configured" }. It never
+//     fabricates an approval against a store that isn't there.
+//   * submitDecision reports what actually happened: the decision is recorded to the
+//     governance store and the hold is resolved there. Whether a real agent then acts is the
+//     enforcement plane's job (it consumes the same row); the effect text says exactly that.
 
 import type { AgentState, CosignDecision, CosignRequest, DriftEvent, SubmitResult } from "../types";
 import type { GovernanceSource, SweepResult, Unsubscribe } from "../source";
+import { getSupabaseAdmin, rowToAgent, rowToHold, rowToDrift } from "../supabase";
 
 export class CogniGateSource implements GovernanceSource {
-  // G3: read fleet state from the ASTS sink (Supabase `agents`, or the sink API).
   async getFleet(): Promise<AgentState[]> {
-    return [];
+    const db = getSupabaseAdmin();
+    if (!db) return [];
+    const { data, error } = await db.from("agents").select("*").order("car_id");
+    if (error) throw new Error(`getFleet: ${error.message}`);
+    return (data ?? []).map((r) => rowToAgent(r as Record<string, unknown>));
   }
 
-  // G2: read PENDING holds CogniGate has parked (Supabase `cosign_requests`).
   async listPendingHolds(): Promise<CosignRequest[]> {
-    return [];
+    const db = getSupabaseAdmin();
+    if (!db) return [];
+    const { data, error } = await db
+      .from("cosign_requests")
+      .select("*")
+      .eq("status", "PENDING")
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(`listPendingHolds: ${error.message}`);
+    return (data ?? []).map((r) => rowToHold(r as Record<string, unknown>));
   }
 
-  async getHold(_id: string): Promise<CosignRequest | null> {
-    return null;
+  async getHold(id: string): Promise<CosignRequest | null> {
+    const db = getSupabaseAdmin();
+    if (!db) return null;
+    const { data, error } = await db.from("cosign_requests").select("*").eq("id", id).maybeSingle();
+    if (error) throw new Error(`getHold: ${error.message}`);
+    return data ? rowToHold(data as Record<string, unknown>) : null;
   }
 
-  // G2: subscribe to Supabase Realtime on `cosign_requests` for new PENDING holds.
-  watchHolds(_onHold: (r: CosignRequest) => void): Unsubscribe {
-    return () => {};
+  // Realtime: new PENDING holds CogniGate parks into the table surface here without polling.
+  watchHolds(onHold: (r: CosignRequest) => void): Unsubscribe {
+    const db = getSupabaseAdmin();
+    if (!db) return () => {};
+    try {
+      const channel = db
+        .channel("cosign-holds")
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "cosign_requests" },
+          (payload) => {
+            try {
+              const hold = rowToHold(payload.new as Record<string, unknown>);
+              if (hold.status === "PENDING") onHold(hold);
+            } catch {
+              // a row that doesn't match the contract is skipped, not rendered
+            }
+          },
+        )
+        .subscribe();
+      return () => {
+        void db.removeChannel(channel);
+      };
+    } catch {
+      return () => {};
+    }
   }
 
-  // G3: subscribe to the ASTS drift channel (Supabase `drift_events`).
-  watchDrift(_onDrift: (e: DriftEvent) => void): Unsubscribe {
-    return () => {};
+  async listRecentDrift(limit = 10): Promise<DriftEvent[]> {
+    const db = getSupabaseAdmin();
+    if (!db) return [];
+    const { data, error } = await db
+      .from("drift_events")
+      .select("*")
+      .order("ts", { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(`listRecentDrift: ${error.message}`);
+    return (data ?? []).map((r) => rowToDrift(r as Record<string, unknown>)).reverse();
   }
 
-  // G2: push the decision to CogniGate's REQUIRE_COSIGN consumer. Inert until wired —
-  // never fabricate success against a missing target.
-  async submitDecision(_requestId: string, _decision: CosignDecision, _actor: string): Promise<SubmitResult> {
-    return { ok: false, reason: "cognigate-not-wired" };
+  // Realtime: drift signals the ASTS sink writes surface here (read-only — consumed, not computed).
+  watchDrift(onDrift: (e: DriftEvent) => void): Unsubscribe {
+    const db = getSupabaseAdmin();
+    if (!db) return () => {};
+    try {
+      const channel = db
+        .channel("drift-events")
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "drift_events" },
+          (payload) => {
+            try {
+              onDrift(rowToDrift(payload.new as Record<string, unknown>));
+            } catch {
+              // skip a malformed signal rather than render it
+            }
+          },
+        )
+        .subscribe();
+      return () => {
+        void db.removeChannel(channel);
+      };
+    } catch {
+      return () => {};
+    }
   }
 
-  // G2: a real sweep flips expired PENDING → TIMEOUT in Supabase and pushes REJECT to
-  // CogniGate. Inert until wired: nothing to sweep.
-  async sweepExpired(_now?: Date): Promise<SweepResult> {
-    return { timedOut: [] };
+  async submitDecision(requestId: string, decision: CosignDecision, actor: string): Promise<SubmitResult> {
+    const db = getSupabaseAdmin();
+    if (!db) return { ok: false, reason: "cognigate-not-configured" };
+
+    const status = decision === "APPROVE" ? "APPROVED" : "REJECTED";
+    // Conditional update: only resolve a hold that is still PENDING. Returns the rows it
+    // changed, so a no-op (already decided / expired) is detectable and honestly reported.
+    const { data, error } = await db
+      .from("cosign_requests")
+      .update({ status, decided_at: new Date().toISOString(), decided_by: actor })
+      .eq("id", requestId)
+      .eq("status", "PENDING")
+      .select("id, action_type");
+    if (error) return { ok: false, reason: `store-error: ${error.message}` };
+    if (!data || data.length === 0) return { ok: false, reason: "hold-not-pending-or-unknown" };
+
+    const effect =
+      decision === "APPROVE"
+        ? "RECORD_MERGE released — recorded to the governance store; the enforcement plane applies the merge."
+        : "RECORD_MERGE denied — recorded to the governance store; the agent proceeds without merging.";
+    return { ok: true, effect };
+  }
+
+  async sweepExpired(now: Date = new Date()): Promise<SweepResult> {
+    const db = getSupabaseAdmin();
+    if (!db) return { timedOut: [] };
+    const { data, error } = await db
+      .from("cosign_requests")
+      .update({ status: "TIMEOUT", decided_at: now.toISOString(), decided_by: "system:ttl-sweeper" })
+      .eq("status", "PENDING")
+      .lt("ttl_expires_at", now.toISOString())
+      .select("*");
+    if (error) throw new Error(`sweepExpired: ${error.message}`);
+    return { timedOut: (data ?? []).map((r) => rowToHold(r as Record<string, unknown>)) };
   }
 }
