@@ -34,9 +34,13 @@ export async function GET(req: Request): Promise<Response> {
       };
       const now = (): string => new Date().toISOString();
 
-      // 1. snapshot: fleet + any already-open holds.
+      // 1. snapshot: fleet, already-open holds, and recent drift (so an agent that is already
+      //    quarantined shows its drift detail on first paint, not just a red chip).
       send({ type: "fleet", at: now(), agents: await source.getFleet() });
       send({ type: "holds", at: now(), holds: await source.listPendingHolds() });
+      for (const event of await source.listRecentDrift()) {
+        send({ type: "drift", at: now(), event });
+      }
 
       // 2. live arrivals.
       const unsubHolds = source.watchHolds((hold) => send({ type: "hold_opened", at: now(), hold }));

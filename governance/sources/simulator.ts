@@ -379,6 +379,11 @@ export class SimulatorSource implements GovernanceSource {
     return () => timers.forEach(clearTimeout);
   }
 
+  async listRecentDrift(): Promise<DriftEvent[]> {
+    // The simulator scripts drift to arrive live (watchDrift), so nothing is pre-existing.
+    return [];
+  }
+
   watchDrift(onDrift: (e: DriftEvent) => void): Unsubscribe {
     const timers: ReturnType<typeof setTimeout>[] = [];
     const fire = (build: () => DriftEvent, reason: string, delay: number): void => {

@@ -8,26 +8,37 @@ CogniGate/ASTS adapter (`governance/sources/cognigate.ts`) persists to once G2/G
 
 - `migrations/0001_cosign_intervention_surface.sql` — the four tables (`agents`,
   `cosign_requests`, `audit_events`, `drift_events`), RLS policies, append-only grants on
-  the audit log, and the Realtime publication on `cosign_requests`.
+  the audit log, and the Realtime publication on `cosign_requests` + `drift_events`.
+- `seed.sql` — synthetic, public-clean demo data (the genealogy fleet, the Cason↔Causey
+  hold, the ambiguous secondary hold, both drift signals). Idempotent, safe to re-run.
 
 ## Apply it
 
 ```bash
-supabase db push                 # with the Supabase CLI linked to your project
-# or paste the migration into the Supabase SQL editor
+supabase db push                 # migrations, with the Supabase CLI linked to your project
+psql "$DATABASE_URL" -f supabase/seed.sql    # then the demo seed (or paste in the SQL editor)
 ```
+
+Use a **dedicated** project — don't drop these tables into an existing app's `public` schema.
 
 ## Wire the app to it
 
-1. Set, server-side only (never `NEXT_PUBLIC_`):
-   - `GOVERNANCE_SOURCE=cognigate`
-   - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (writes are server-side)
-   - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (read-only Realtime in the client)
-   - `OPERATOR_ID` (+ optional `OPERATOR_NAME`) — live mode refuses decisions without one
-   - `CRON_SECRET` — the TTL sweeper requires `Authorization: Bearer $CRON_SECRET` in live mode
-2. Implement the marked sections in `governance/sources/cognigate.ts` against the Supabase
-   client and the CogniGate REQUIRE_COSIGN consumer / ASTS sink. Until then the adapter is
-   inert by design (`submitDecision` returns `{ ok: false, reason: "cognigate-not-wired" }`).
+The adapter (`governance/sources/cognigate.ts`) is **implemented** against Supabase — reads,
+Realtime, decisions, audit, and the fail-closed sweep all go through it. To run the live path
+you only set env (server-side only, never `NEXT_PUBLIC_` for the service-role key):
+
+- `GOVERNANCE_SOURCE=cognigate`
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (writes are server-side; the key is in the
+  Supabase dashboard under Project Settings → API)
+- `OPERATOR_ID` (+ optional `OPERATOR_NAME`) — live mode refuses decisions without one
+- `CRON_SECRET` — the TTL sweeper requires `Authorization: Bearer $CRON_SECRET` in live mode
+
+If the Supabase env is absent the adapter stays inert (`{ ok: false,
+reason: "cognigate-not-configured" }`) — it never fabricates an approval.
+
+The remaining **private-plane** half (not in this repo): CogniGate parks holds into / consumes
+decisions from these tables (G2), and the ASTS sink writes fleet + drift into them (G3). Both
+sides meet only at the four tables.
 
 ## Security model (enforced by the grants)
 

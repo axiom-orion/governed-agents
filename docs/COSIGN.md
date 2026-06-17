@@ -49,20 +49,39 @@ mechanisms enforce it:
 Default TTL is **15 minutes**; tighten per action type (the simulator's secondary hold uses
 90s so the expiry is watchable).
 
-## Simulator-first, adapter-swappable
+## Simulator-first, adapter-swappable — and the live path is wired
 
-Everything works today on the **simulator** (`GOVERNANCE_SOURCE=simulator`, the default):
-zero infrastructure, synthetic and scripted, no bridge to a real agent — safe for public
-exposure, and the kill switch. Flipping to live is one env var once two prerequisites land:
+The default is the **simulator** (`GOVERNANCE_SOURCE=simulator`): zero infrastructure,
+synthetic and scripted, no bridge to a real agent — safe for public exposure, and the kill
+switch. Set `GOVERNANCE_SOURCE=cognigate` (+ the Supabase env vars) and the console runs
+against Postgres instead.
 
-| Gate | What it needs | Until then |
+**Supabase is the seam.** The public console only ever talks to Supabase; the private
+CogniGate/ASTS side reads and writes the *same* tables. So no CogniGate endpoint and no I(θ)
+internals live in this repo — the adapter only moves rows that match the public contract.
+
+```
+              ┌─────────── public repo (this) ───────────┐   ┌──── private plane ────┐
+  Operator ── │ console → decideCosign → Supabase tables  │ ⇄ │ CogniGate consumes the │
+              │ console ← stream/RSC  ← Supabase tables    │   │ decision row; ASTS     │
+              └───────────────────────────────────────────┘   │ writes fleet + drift   │
+                                                               └────────────────────────┘
+```
+
+`governance/sources/cognigate.ts` is the live adapter: reads (`getFleet`,
+`listPendingHolds`, `getHold`, `listRecentDrift`) and Realtime subscriptions come from
+Supabase; `submitDecision` and `sweepExpired` write to it; the Truth Chain persists to
+`audit_events`. If the Supabase env isn't set it stays **inert** —
+`{ ok: false, reason: "cognigate-not-configured" }`, never a fabricated approval.
+
+What still belongs to the private plane (not this repo):
+
+| Gate | The private-plane half | Effect if absent |
 |---|---|---|
-| **G2** | CogniGate's `REQUIRE_COSIGN` path emits hold events and consumes decisions | `submitDecision` is inert: `{ ok: false, reason: "cognigate-not-wired" }` — never a fabricated approval |
-| **G3** | The ASTS sink emits queryable fleet state + the I(θ) divergence signal | No live fleet/drift |
+| **G2** | CogniGate's `REQUIRE_COSIGN` path *parks holds into* and *consumes decisions from* the shared tables | Decisions persist + audit, but no real agent acts on the release/reject |
+| **G3** | The ASTS sink *writes* fleet state + the I(θ) divergence signal into the shared tables | Fleet/drift only reflect what's been seeded, not live agents |
 
-`governance/registry.ts` selects the implementation; `governance/sources/cognigate.ts` is
-the live adapter (inert stub); `supabase/` holds the schema, RLS, and grants the live path
-persists to.
+Both halves meet at the four Supabase tables — neither side imports the other's code.
 
 ## Drift detection is method-aware (and the claim has to be true)
 
@@ -102,10 +121,11 @@ Four tables: `agents`, `cosign_requests`, `audit_events`, `drift_events`
   insert/update/delete anywhere.
 - All writes go through Server Actions using the **service-role key, server-side only** —
   absent from the client bundle (enforced by `server-only` import guards).
-- **`audit_events` is append-only**: UPDATE/DELETE revoked from every role; inserts
-  server-only. The chain hash is `sha256(prev_hash || canonical({id, ts, agent_car_id,
-  event_type, actor, payload}))`.
-- Realtime is enabled on `cosign_requests`.
+- **`audit_events` is append-only**: UPDATE/DELETE revoked from *every* role including
+  `service_role` (verified on the live project — the app role can `INSERT`/`SELECT` only);
+  the chain hash is `sha256(prev_hash || canonical({id, ts, agent_car_id, event_type, actor,
+  payload}))`.
+- Realtime is enabled on `cosign_requests` and `drift_events`.
 
 ### Audit: tamper-evident, not tamper-proof
 
@@ -114,12 +134,31 @@ An in-place edit or deletion of a past row breaks the hash linkage, so tampering
 rewrite the whole chain. True WORM needs an external ledger. The limitation is named in the
 console footer and here, not papered over.
 
+## Run the live path
+
+```bash
+# server-side only (set in Vercel → Environment Variables, or .env.local for local runs)
+GOVERNANCE_SOURCE=cognigate
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role key, from the Supabase dashboard>
+OPERATOR_ID=<your operator id>          # live mode refuses decisions without one
+CRON_SECRET=<random>                    # the TTL sweeper requires it in live mode
+```
+
+Apply `supabase/migrations/0001_*.sql` then `supabase/seed.sql` to a project (a dedicated
+one — don't mix the tables into an existing app's `public` schema). The default deployment
+stays on the simulator (free, public-safe); cognigate mode is opt-in per environment.
+
 ## Verify it
 
 ```bash
 npm run verify:cosign   # 42 checks, zero infra: round-trip · audit chain · tamper · fail-closed · drift · Zod · honesty
 npm run build           # server/client boundaries; server-only keeps the decision path off the client
 ```
+
+The live read path + RLS were verified against a real project: reads map and Zod-validate
+(10 agents, both holds, both drift methods), and `anon` is denied UPDATE/INSERT and is blind
+to `audit_events` (Postgres `42501`).
 
 Files: `governance/{types,source,registry,audit}.ts`, `governance/sources/{simulator,cognigate}.ts`,
 `app/_actions/cosign.ts`, `app/api/governance/{stream,sweep}/route.ts`, `app/console/page.tsx`,
