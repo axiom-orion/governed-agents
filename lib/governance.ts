@@ -213,6 +213,17 @@ export const DESTRUCTIVE_KINDS: ReadonlySet<string> = new Set([
   "overwrite",
 ]);
 
+/**
+ * Actions consequential enough to warrant adversarial (Red Cell) review: outbound
+ * sends and irreversible/destructive kinds. Internal records are still gated by the
+ * hard rules — provenance, PII, consensus, distinct voices — but running a
+ * "never rubber-stamp" generative red team on every internal note manufactures
+ * objections without protecting anything. Scrutiny escalates with the stakes.
+ */
+export function isConsequentialKind(kind: string): boolean {
+  return kind === "send_email" || DESTRUCTIVE_KINDS.has(kind);
+}
+
 function isApproved(payload: Readonly<Record<string, unknown>>): boolean {
   return payload.approved === true || typeof payload.approvalToken === "string";
 }

@@ -39,6 +39,11 @@ jobs:
         env:
           AGENTS_OFFLINE: "1"
 
+      - name: Cosign intervention surface (round-trip · audit chain · fail-closed · drift)
+        run: npm run verify:cosign
+        env:
+          AGENTS_OFFLINE: "1"
+
       - name: Loop smoke test — allow + block must hit expected gate outcomes
         run: npm run demo
         env:
