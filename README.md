@@ -83,6 +83,9 @@ beats a **review** request beats **allow**:
 | `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data (SSN / card / phone) |
 | `destructive-action-needs-approval` | `delete_record` / destructive kinds | **needs-approval** unless an approval token is attached |
 | `require-model-consensus` | multi-model (triad) runs | **needs-approval** when model agreement falls below the threshold (default unanimous) |
+| `require-distinct-voices` | multi-model (triad) runs | **needs-approval** when the agreeing votes resolve to fewer than 2 distinct attested model instances — corroboration counts voices, not echoes |
+| `red-cell-independence` | red-cell-reviewed actions | **needs-approval** when the reviewing instance is (or cannot be proven not to be) the proposing instance — oversight is theater otherwise |
+| `red-cell-objection` | red-cell-reviewed actions | **needs-approval** when the adversarial reviewer objects, with the critique attached |
 
 The thresholds are genuinely editable: they flow to the **Live** backend in the
 request body, and the **Sample** replay **recomputes** the gate
@@ -98,6 +101,67 @@ holds the run for a human instead of acting on a split decision. A provider with
 key simply **abstains**, so it degrades gracefully to a single model. Set
 `GEMINI_API_KEY` + `XAI_API_KEY` to light up Live; the *“model triad agrees / splits”*
 Sample scenarios demo it with zero keys.
+
+### Attested independence + the Red Cell (oversight that can prove it's not theater)
+
+Every vote now carries an attested **voice identity** — the configured
+`(provider, model id)` pair — and the consensus records how many **distinct
+instances** actually backed the chosen action. A unanimous "consensus" whose agreeing
+votes resolve to one instance is one voice echoed N times; `require-distinct-voices`
+routes it to a human instead of honoring it. After the action is chosen, the **Red
+Cell** ([`lib/redcell.ts`](lib/redcell.ts)) — an adversarial *mode*, not a fourth
+agent — runs on an instance provably distinct from the generator and makes the
+strongest case against the action; the gate refuses to honor its verdict if the
+voices collapse, and parks any objection for a human. Honest scope: for API-backed
+voices this attests what we *configured and called* — it cannot see through a
+provider's internal routing, and that residual trust is named, not papered over.
+Verified headlessly (32 checks, zero keys): `npx tsx scripts/verify-governance.ts`.
+
+Both are **glass-boxed in the trace UI**: the consensus panel shows each vote's attested
+`provider/model` and flags an *echo* (agreeing votes that resolve to one instance); a Red
+Cell panel shows the reviewer's verdict, its attested identity, and whether it's independent
+of the proposer. Two Sample scenarios demo them with zero keys — *"unanimous, but one voice
+echoed"* and *"the Red Cell objects"* — and the projections are pinned in `verify-trace`
+(70 checks).
+
+Verify your keys + model ids from the terminal before deploying:
+
+```bash
+npm run check:providers   # pings each configured provider, prints ✓/✗ per model
+```
+
+## The intervention console — where a human stops a bad merge
+
+The gate and the Red Cell are *automated* control. The **intervention console**
+([`/console`](http://localhost:3000/console)) is the **runtime human-in-the-loop** half —
+the place an operator sits, watches a fleet, and intervenes. Three surfaces on one page,
+pointed at the [flcason.com](https://flcason.com) genealogy reference impl:
+
+- **Cosign queue** — the first *write path* in the stack. A `REQUIRE_COSIGN`-held action
+  surfaces with full context; the operator approves or rejects; the decision routes back
+  through the enforcement plane and lands in an append-only, hash-linked **Truth Chain**.
+  The centerpiece is the **Cason↔Causey merge refusal**: two “Elias” records the matcher
+  wants to merge, and the **Maryland-detour fingerprint** that proves they’re distinct
+  lineages — a human visibly stopping a bad merge.
+- **Fleet view** — read-only: ten agents, CAR ID, BASIS tier, status, attestation method.
+- **Drift → quarantine** — two model swaps caught, each by the *right* method: **Scribe**
+  (self-hosted open weights) by weight-space **I(θ)**, and an **API-backed agent** by
+  **canary-probe** behavioral attestation. Both agents auto-quarantine.
+
+Two design commitments make it credible:
+
+- **Fail-closed.** No human ack before the TTL expires ⇒ **auto-reject** + audit. Silence is
+  refusal, not release. (Default 15m; tighter per action type.)
+- **Honest drift.** Weight-space I(θ) needs the weights, so it applies *only* to Scribe (the
+  one self-hosted open-weight agent); the nine API-backed agents are attested by
+  **canary-probe** behavioral checks, never by I(θ). The `DriftEvent` type makes the wrong
+  claim impossible to express.
+
+Simulator-first and adapter-swappable: it runs today with **zero infrastructure** and is
+safe for public exposure (synthetic, no bridge to a real agent). Flipping to the live
+CogniGate/ASTS + Supabase path is one env var (`GOVERNANCE_SOURCE`). Full write-path boundary,
+data model, and limitations: [`docs/COSIGN.md`](docs/COSIGN.md). Verified headlessly
+(42 checks, zero infra): `npm run verify:cosign`.
 
 ## Quickstart
 
@@ -151,14 +215,15 @@ on Vercel.
 
 ## What I'd build next
 
-- **Human-in-the-loop approval that resolves** — an approve/deny affordance on the
-  `needs_approval` state that continues the run (the third state currently parks).
+- **Human-in-the-loop approval that resolves** — _built_ as the
+  [intervention console](docs/COSIGN.md): a cosign queue where an operator approves/rejects a
+  held action and the decision routes back to the enforcement plane (fail-closed on timeout).
+- **Durable audit log** — _built_ as the hash-linked **Truth Chain** (append-only, server-only
+  writes, tamper-evident); persisted to Postgres on the live path (`supabase/`).
 - **Policy as data** — load rules/thresholds from a versioned config or small DSL,
   with per-rule provenance requirements, instead of code.
 - **An eval harness** — a labeled set of (task → expected decision) cases run in CI to
   catch policy regressions, with precision/recall on block decisions.
-- **Durable audit log** — persist every `gate_decision` (who/what/why/when) to a real
-  store, queryable and exportable, rather than living only in the stream.
 - **More gate types** — rate limits, spend caps, recipient allowlists, and
   data-residency rules, composed into named policy bundles.
 
@@ -177,7 +242,54 @@ components/            React Flow canvas + hero + guided walkthrough + audit pan
 mocks/trace.sample.ts  recorded runs for the instant Sample mode
 scripts/verify-trace.ts headless contract test (CI)
 docs/ARCHITECTURE.md   data flow + full event schema
+docs/STATUS.md         current state, decisions, operational setup + open items
+examples/governed-trader/  the same gate on a trade — the canonical irreversible action
+
+# the intervention console (cosign · fleet · drift) — see docs/COSIGN.md
+app/console/page.tsx          RSC first paint → the client console
+app/_actions/cosign.ts        decideCosign Server Action (audit-before · submit · audit-after)
+app/api/governance/stream     realtime NDJSON: fleet snapshot, holds arriving, drift firing
+app/api/governance/sweep      fail-closed TTL sweeper (Vercel Cron backstop)
+governance/types.ts           Zod schemas at every boundary (BASIS tier, holds, method-aware drift)
+governance/source.ts          the adapter boundary (sim/live swappable)
+governance/sources/simulator.ts  zero-infra: scripts the Cason↔Causey hold + the Scribe I(θ) drift
+governance/sources/cognigate.ts  live CogniGate/ASTS adapter — inert until G2/G3 (no fake approvals)
+governance/audit.ts           the hash-linked Truth Chain (append-only, server-only)
+components/console/            fleet rail · cosign queue · the hold card · drift panel · audit trail
+supabase/                     migrations + RLS for the live persistence path
+scripts/verify-cosign.ts      headless: round-trip · audit chain · fail-closed · drift · Zod (CI)
 ```
+
+## Example — the gate on the action that matters most
+
+[`examples/governed-trader`](examples/governed-trader) points this repo's idea — a typed
+pre-execution gate with named rules and a streamed NDJSON trace — at a **trade**, the
+canonical irreversible, real-money action. Same loop shape (propose → gate →
+execute/hold/block), zero dependencies, CPU-only, on **frozen real** data across two
+asset classes — 24/7 crypto and calendar-bound US equities/ETFs (with cash dividends,
+opening-gap circuit-breakers, and FINRA-style rules); no orders are ever placed. It makes
+two hand-waved claims measurable: governance (the *only* variable is the gate — an
+ungoverned order stream breaches hard rules on 16 crypto / 120 equity decisions, the
+governed runs on **0**, and on crypto it cuts max drawdown from −3.7% to −2.6%) and honesty
+(a backtest auditor that isolates four lies — lookahead, zero-cost, hindsight universe,
+ignored dividends — and **refuses to attest** each, plus an eval that names which rules
+actually bound vs. which are only proven in the self-tests). Run it from that directory:
+
+```sh
+cd examples/governed-trader
+npm test               # gate · conductor · audit · equities self-tests (66 assertions)
+node eval/run_eval.js  # reproduce the claims on both asset classes
+npm run trace          # stream a real NDJSON audit trace of a governed run
+```
+
+## Composed in production
+
+The `evaluatePolicy` + `TraceEvent` contract here is ported into a live consumer:
+[**cason-heritage**](https://github.com/axiom-orion/cason-heritage) ([flcason.com](https://flcason.com)).
+Its genealogy "Keeper" decides every proposed record with the same typed gate
+(allow / needs-approval / block, named rules with thresholds) and writes the same
+NDJSON `TraceEvent` audit trail — the gate and the glass-box you can watch in the demo
+here, running on a real family's record.
 
 ## About
 

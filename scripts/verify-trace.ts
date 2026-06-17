@@ -24,8 +24,10 @@ import {
   blockRun,
   buildTraceStream,
   consensusRun,
+  echoConsensusRun,
   INJECTED_MALFORMED_COUNT,
   piiRun,
+  redCellRun,
   splitRun,
   toNdjson,
   withMalformedLines,
@@ -363,6 +365,57 @@ async function main(): Promise<void> {
   // Raise it above 67% → still held.
   const splitHigh = projectTrace(replayWithPolicy(splitRun, { consensusThreshold: 0.7 }));
   eqStr("consensus-split @0.70: still awaiting", splitHigh.status, "awaiting");
+
+  // --- attested independence (§7-2) -----------------------------------------
+  // Unanimous (100% agreement) but the three votes are one attested instance → an echo.
+  // require-distinct-voices routes it to a human even though require-model-consensus passes.
+  const echo = projectTrace(replayWithPolicy(echoConsensusRun, {}));
+  eqStr("echo: status awaiting (unanimous, but one voice)", echo.status, "awaiting");
+  const echoGate = echo.nodes.find((n) => n.kind === "gate");
+  check(
+    "echo: violation = require-distinct-voices (not require-model-consensus)",
+    echoGate?.kind === "gate" &&
+      echoGate.decision.decision === "needs_approval" &&
+      echoGate.decision.violations.some((v) => v.rule === "require-distinct-voices") &&
+      echoGate.decision.violations.every((v) => v.rule !== "require-model-consensus"),
+  );
+  const echoReasoner = echo.nodes.find(
+    (n): n is typeof n & { kind: "step" } => n.kind === "step" && n.role === "reasoner",
+  );
+  check(
+    "echo: the projected action carries distinctVoices = 1 (the glass-box reads it)",
+    echoReasoner?.kind === "step" && echoReasoner.proposedAction?.consensus?.distinctVoices === 1,
+  );
+  // Drop the bar to 1 distinct voice → the echo now clears (the threshold is real).
+  const echoLow = projectTrace(replayWithPolicy(echoConsensusRun, { minDistinctVoices: 1 }));
+  eqStr("echo @minDistinctVoices=1: now completes", echoLow.status, "completed");
+
+  // --- Red Cell (§7-2) ------------------------------------------------------
+  // An independent reviewer objects → red-cell-objection routes the action to a human,
+  // and the projected action carries the verdict + reviewer identity for the glass-box.
+  const redcell = projectTrace(replayWithPolicy(redCellRun, {}));
+  eqStr("redcell: status awaiting (independent objection)", redcell.status, "awaiting");
+  const redGate = redcell.nodes.find((n) => n.kind === "gate");
+  check(
+    "redcell: violation = red-cell-objection",
+    redGate?.kind === "gate" &&
+      redGate.decision.decision === "needs_approval" &&
+      redGate.decision.violations.some((v) => v.rule === "red-cell-objection"),
+  );
+  check(
+    "redcell: no red-cell-independence violation (reviewer is a distinct instance)",
+    redGate?.kind === "gate" &&
+      redGate.decision.violations.every((v) => v.rule !== "red-cell-independence"),
+  );
+  const redReasoner = redcell.nodes.find(
+    (n): n is typeof n & { kind: "step" } => n.kind === "step" && n.role === "reasoner",
+  );
+  check(
+    "redcell: projected action carries the Red Cell verdict + reviewer voice",
+    redReasoner?.kind === "step" &&
+      redReasoner.proposedAction?.redCell?.verdict === "object" &&
+      redReasoner.proposedAction.redCell.voice.provider === "grok",
+  );
 
   // --- degenerate inputs ----------------------------------------------------
   const empty = projectTrace([]);

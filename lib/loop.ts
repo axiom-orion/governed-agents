@@ -8,13 +8,15 @@ import { randomUUID } from "node:crypto";
 import {
   defaultPolicy,
   evaluatePolicy,
+  isConsequentialKind,
   type PolicyRule,
   type ProposedAction,
 } from "./governance";
 import type { TraceEvent } from "./trace-events";
 import { runExecutor, runResearcher } from "./agents";
 import { runConsensusReasoner } from "./consensus";
-import { createReasonerVoters } from "./providers";
+import { runRedCell, withRedCell } from "./redcell";
+import { createReasonerVoters, type Voter } from "./providers";
 import { createModelClient, type ModelClient } from "./model-client";
 
 const now = (): string => new Date().toISOString();
@@ -23,6 +25,7 @@ export async function* runLoop(
   task: string,
   client: ModelClient = createModelClient(),
   policy: readonly PolicyRule[] = defaultPolicy,
+  voters: readonly Voter[] = createReasonerVoters(client),
 ): AsyncGenerator<TraceEvent> {
   const runId = randomUUID();
   yield { type: "run_started", runId, task, at: now() };
@@ -46,11 +49,16 @@ export async function* runLoop(
     // Gemini/Grok keys present it votes and attaches the consensus for the gate.
     const reasonerStep = `${runId}:reasoner`;
     yield { type: "step_started", stepId: reasonerStep, role: "reasoner", at: now() };
-    const action: ProposedAction = await runConsensusReasoner(
-      task,
-      finding,
-      createReasonerVoters(client),
-    );
+    const proposed: ProposedAction = await runConsensusReasoner(task, finding, voters);
+    // Red Cell (adversarial mode): reserved for consequential actions — outbound sends
+    // and destructive/irreversible kinds — where an independent "make the case against
+    // it" review earns its cost. Internal records are still gated by the hard rules but
+    // skip the generative red team. Needs ≥2 voters so a distinct reviewer can exist;
+    // single-voter (offline/CI) runs are unchanged.
+    const action: ProposedAction =
+      voters.length >= 2 && isConsequentialKind(proposed.kind)
+        ? withRedCell(proposed, await runRedCell(task, proposed, voters))
+        : proposed;
     yield {
       type: "step_completed",
       stepId: reasonerStep,

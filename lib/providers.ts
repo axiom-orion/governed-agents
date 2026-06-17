@@ -13,10 +13,12 @@ import {
   MODELS,
   isOffline,
   parseActionDraft,
+  parseRedCellDraft,
   type ActionDraft,
   type ActionProposer,
   type ModelClient,
   type ProposeInput,
+  type RedCellDraft,
 } from "./model-client";
 
 export const TRIAD_MODELS = {
@@ -39,6 +41,16 @@ const ACTION_PARAMETERS = {
     justification: { type: "string" },
   },
   required: ["kind", "justification"],
+} as const;
+
+// JSON-Schema for the Red Cell verdict (OpenAI/xAI flavor — lowercase types).
+const REVIEW_PARAMETERS = {
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["concur", "object"] },
+    critique: { type: "string" },
+  },
+  required: ["verdict", "critique"],
 } as const;
 
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -108,6 +120,32 @@ class GeminiActionProposer implements ActionProposer {
     });
     return parseActionDraft(JSON.parse(geminiText(data)) as unknown);
   }
+
+  public async review(input: ProposeInput): Promise<RedCellDraft> {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      input.model,
+    )}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
+    const data = await postJson(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: input.system }] },
+        contents: [{ role: "user", parts: [{ text: input.user }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              verdict: { type: "STRING", enum: ["concur", "object"] },
+              critique: { type: "STRING" },
+            },
+            required: ["verdict", "critique"],
+          },
+        },
+      }),
+    });
+    return parseRedCellDraft(JSON.parse(geminiText(data)) as unknown);
+  }
 }
 
 // --- Grok (xAI, OpenAI-compatible) -----------------------------------------
@@ -158,12 +196,59 @@ class GrokActionProposer implements ActionProposer {
     });
     return parseActionDraft(JSON.parse(grokToolArguments(data)) as unknown);
   }
+
+  public async review(input: ProposeInput): Promise<RedCellDraft> {
+    const data = await postJson("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: input.model,
+        messages: [
+          { role: "system", content: input.system },
+          { role: "user", content: input.user },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "red_cell_review",
+              description: "Deliver the Red Cell's adversarial verdict on the proposed action.",
+              parameters: REVIEW_PARAMETERS,
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "red_cell_review" } },
+      }),
+    });
+    return parseRedCellDraft(JSON.parse(grokToolArguments(data)) as unknown);
+  }
 }
 
 /** A model in the vote, paired with the model id it should be called with. */
 export interface Voter {
   readonly proposer: ActionProposer;
   readonly model: string;
+}
+
+/**
+ * The extra (non-primary) voters that have an API key configured — Gemini and/or
+ * Grok. Unlike {@link createReasonerVoters} this ignores AGENTS_OFFLINE, so the
+ * provider-check script can probe them directly.
+ */
+export function createExtraVoters(): Voter[] {
+  const voters: Voter[] = [];
+  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+  if (geminiKey !== undefined && geminiKey.length > 0) {
+    voters.push({ proposer: new GeminiActionProposer(geminiKey), model: TRIAD_MODELS.gemini });
+  }
+  const xaiKey = process.env.XAI_API_KEY?.trim();
+  if (xaiKey !== undefined && xaiKey.length > 0) {
+    voters.push({ proposer: new GrokActionProposer(xaiKey), model: TRIAD_MODELS.grok });
+  }
+  return voters;
 }
 
 /**
@@ -174,14 +259,5 @@ export interface Voter {
 export function createReasonerVoters(primary: ModelClient): Voter[] {
   const voters: Voter[] = [{ proposer: primary, model: MODELS.reasoner }];
   if (isOffline()) return voters;
-
-  const geminiKey = process.env.GEMINI_API_KEY?.trim();
-  if (geminiKey !== undefined && geminiKey.length > 0) {
-    voters.push({ proposer: new GeminiActionProposer(geminiKey), model: TRIAD_MODELS.gemini });
-  }
-  const xaiKey = process.env.XAI_API_KEY?.trim();
-  if (xaiKey !== undefined && xaiKey.length > 0) {
-    voters.push({ proposer: new GrokActionProposer(xaiKey), model: TRIAD_MODELS.grok });
-  }
-  return voters;
+  return [...voters, ...createExtraVoters()];
 }
