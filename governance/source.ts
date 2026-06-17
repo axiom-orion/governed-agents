@@ -30,6 +30,10 @@ export interface GovernanceSource {
   /** Subscribe to newly-held actions. Returns an unsubscribe. Server-side (stream route). */
   watchHolds(onHold: (r: CosignRequest) => void): Unsubscribe;
 
+  /** Recent drift signals for the stream's first paint (so already-quarantined agents show
+   *  their drift detail, not just a red chip). The simulator fires drift live and returns []. */
+  listRecentDrift(limit?: number): Promise<DriftEvent[]>;
+
   /** Subscribe to drift/quarantine signals. Returns an unsubscribe. Server-side (stream route). */
   watchDrift(onDrift: (e: DriftEvent) => void): Unsubscribe;
 

@@ -60,6 +60,8 @@ create index if not exists cosign_requests_pending_idx
 -- ----------------------------------------------------------------------------
 create table if not exists audit_events (
   id           uuid primary key default gen_random_uuid(),
+  -- monotonic insertion order, so the chain tip (and full ordering) is unambiguous.
+  seq          bigint generated always as identity,
   ts           timestamptz not null default now(),
   agent_car_id text,
   event_type   text not null,
@@ -126,6 +128,7 @@ create policy drift_select_all on drift_events
 revoke update, delete on audit_events from anon, authenticated, service_role;
 
 -- ============================================================================
--- Realtime — surface new PENDING holds to the cosign queue without polling
+-- Realtime — surface new holds (cosign queue) and drift signals (quarantine) live
 -- ============================================================================
 alter publication supabase_realtime add table cosign_requests;
+alter publication supabase_realtime add table drift_events;

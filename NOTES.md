@@ -332,3 +332,32 @@ sweep, drift→quarantine with method discrimination, Zod rejects malformed payl
 adapter never fabricates an approval. Wired into CI. `npm run build` green (server-only keeps
 the decision path off the client bundle). Runtime-smoked: the stream delivers fleet → both
 holds → Scribe drift → quarantine in order.
+
+---
+
+## 12. Live path wired — Supabase is the seam
+
+`GOVERNANCE_SOURCE=cognigate` is no longer an inert stub; it reads/writes a real Supabase
+project. **Supabase is the seam**: the public console only talks to Supabase, the private
+CogniGate/ASTS side reads/writes the same four tables — so no CogniGate endpoint and no I(θ)
+internals enter this public repo.
+
+| Piece | Landed | Notes |
+|---|---|---|
+| Supabase client + mappers | ✅ | `governance/supabase.ts` — server-only; snake_case→camelCase, ts/number normalized for PostgREST, every row Zod-validated; `SupabaseAuditStore` (append-only) |
+| Live adapter | ✅ | `governance/sources/cognigate.ts` — reads + Realtime + `submitDecision` + `sweepExpired`; inert (`cognigate-not-configured`) if env unset — never a fake approval |
+| `listRecentDrift` | ✅ | new boundary method so an already-quarantined agent shows its drift detail on first paint (sim returns []) |
+| Registry | ✅ | cognigate mode swaps in the Supabase audit store synchronously |
+| Schema + seed | ✅ | `supabase/migrations/0001` (+ `seq`, drift_events realtime); `supabase/seed.sql` (synthetic genealogy fleet/holds/drift) |
+| Provisioned | ✅ | dedicated project under the Vorion org (us-east-1, $10/mo), migrated + seeded (10 agents · 2 holds · 2 drift) |
+
+**Verified live** (anon key, real Postgres): reads map + Zod-validate (10 agents, both holds
+with the Maryland evidence, both drift methods); RLS denies anon UPDATE/INSERT and blinds anon
+to `audit_events` (`42501`); `service_role` has INSERT/SELECT but **no UPDATE/DELETE** on
+`audit_events` (append-only at the grant level). Build green; verify:cosign 42/42; existing
+gates unchanged (governance 42, trace 70). The service-role key isn't committed — set it in
+Vercel/`.env.local` from the dashboard to enable the live write path. Default deploy stays on
+the simulator (free, public-safe).
+
+**Still private-plane (out of repo):** G2 (CogniGate parks/consumes via the tables) and G3
+(ASTS writes fleet/drift via the tables).
