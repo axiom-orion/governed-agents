@@ -1,0 +1,27 @@
+{
+  // Cloudflare Workers deployment for the Next.js app, built by the OpenNext adapter
+  // (`npm run deploy`, or Workers Builds connected to this repo).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "governed-agents",
+  // Serves the OpenNext build and runs the governance sweep on the Cron Trigger below.
+  "main": "cloudflare-worker.mjs",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "governed-agents"
+    }
+  ],
+  // The fail-closed TTL sweep, on the same schedule vercel.json used (daily, 03:00 UTC).
+  "triggers": {
+    "crons": ["0 3 * * *"]
+  },
+  "observability": {
+    "enabled": true
+  }
+}

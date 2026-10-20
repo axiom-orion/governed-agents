@@ -10,9 +10,9 @@ import { createModelClient } from "@/lib/model-client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// Raise the function timeout for the multi-step model loop. 60s is safe on every
-// Vercel plan (Hobby caps at 60; Pro 300; Enterprise 900) and the loop finishes in
-// seconds — bump to 300 on Pro+ if you want more headroom.
+// Raise the function timeout for the multi-step model loop on Node hosts; the loop
+// finishes in seconds. Cloudflare Workers ignore this: they limit CPU time instead, and
+// the loop spends most of its time waiting on model APIs, which doesn't count.
 export const maxDuration = 60;
 
 interface RunRequest {
