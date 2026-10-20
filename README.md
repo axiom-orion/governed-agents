@@ -182,12 +182,32 @@ runs end-to-end with zero setup; set the key (server-only) for live Claude calls
 Models (override via env): Researcher `claude-haiku-4-5`, Reasoner
 `claude-sonnet-4-6`, Executor `claude-haiku-4-5`.
 
+## Deploy (Cloudflare Workers)
+
+The app runs on Cloudflare Workers through the [OpenNext adapter](https://opennext.js.org/cloudflare);
+`wrangler.jsonc` holds the Worker config.
+
+```bash
+npm run preview   # build for Workers and serve it locally on the Workers runtime
+npm run deploy    # build and deploy (run `npx wrangler login` once first)
+```
+
+To deploy on every push instead, connect this repo to the Worker in the Cloudflare
+dashboard with build command `npm run cf:build` and deploy command
+`npx opennextjs-cloudflare deploy`.
+
+With no secrets set, the deployed demo uses the offline stub. Add `ANTHROPIC_API_KEY`
+(plus `GEMINI_API_KEY` and `XAI_API_KEY` for the consensus triad) as Worker secrets
+for live models. The fail-closed TTL sweep, which auto-rejects approval holds no human
+answered, runs on a Cron Trigger (`cloudflare-worker.mjs`, daily at 03:00 UTC); in live
+mode, set `CRON_SECRET` as well.
+
 ## Tech stack
 
-Next.js 15 (App Router) · React 19 · TypeScript (strict, `noUncheckedIndexedAccess`,
+Next.js 16 (App Router) · React 19 · TypeScript (strict, `noUncheckedIndexedAccess`,
 no `any`) · Tailwind CSS · React Flow (`@xyflow/react`) · `@anthropic-ai/sdk`
 server-side, with Gemini + Grok over guarded REST for the consensus triad · deployed
-on Vercel.
+on Cloudflare Workers via the OpenNext adapter.
 
 ## Design decisions & tradeoffs
 

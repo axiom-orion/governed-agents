@@ -3,8 +3,8 @@
 // auto-rejected (TIMEOUT) and audited. For a governance system the only defensible default
 // is deny-if-no-human-acks, so this is non-negotiable: silence becomes refusal, not release.
 //
-// Wire this to a Vercel Cron (e.g. every minute) — or a Supabase scheduled function on the
-// live path. It is the backstop that guarantees the posture even if no operator is watching.
+// Wired to a Cloudflare Cron Trigger (see cloudflare-worker.mjs and wrangler.jsonc) — or use a
+// Supabase scheduled function on the live path. It is the backstop that guarantees the posture even if no operator is watching.
 //
 // Auth: in live mode require a shared secret (CRON_SECRET) so only the scheduler can fire it.
 // In simulator mode it is harmless (synthetic, no real agents) and left open for the demo.
@@ -40,6 +40,6 @@ async function sweep(req: Request): Promise<Response> {
   });
 }
 
-// Vercel Cron issues GET; allow POST too for manual/testing triggers.
+// Schedulers may issue GET or POST (the Cloudflare cron handler sends POST); both run the sweep.
 export const GET = sweep;
 export const POST = sweep;

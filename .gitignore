@@ -33,3 +33,8 @@ next-env.d.ts.bak
 .idea
 
 .vercel
+
+# cloudflare (OpenNext build output, local wrangler state, local secrets)
+/.open-next/
+/.wrangler/
+.dev.vars

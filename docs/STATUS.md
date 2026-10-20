@@ -5,6 +5,9 @@ context survives chat archiving. Last updated end of the consensus/Red-Cell arc.
 
 ## What's live
 
+> **2026-10-20:** hosting moved from Vercel to Cloudflare Workers (see the README's
+> Deploy section). Vercel references below are historical.
+
 `governed-agents.vercel.app` — Researcher → Reasoner → governance gate → execute / halt /
 needs-approval, rendered from a streamed NDJSON trace.
 
