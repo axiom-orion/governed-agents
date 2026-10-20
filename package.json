@@ -7,6 +7,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "cf:build": "opennextjs-cloudflare build",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",
     "check:model": "tsx scripts/check-model.ts",
@@ -19,6 +22,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
+    "@opennextjs/cloudflare": "^1.20.12",
     "@supabase/supabase-js": "^2.108.2",
     "@xyflow/react": "^12.3.6",
     "next": "^16.3.0",
@@ -35,6 +39,12 @@
     "postcss": "^8.5.23",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "wrangler": "^4.151.3"
+  },
+  "overrides": {
+    "@node-minify/core": {
+      "glob": "^10.5.0"
+    }
   }
 }

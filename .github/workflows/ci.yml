@@ -72,3 +72,29 @@ jobs:
 
       - name: Eval — reproduce the governance + honesty claims on frozen crypto + equities data
         run: node eval/run_eval.js
+
+  cloudflare-bundle:
+    # Builds the Cloudflare Workers bundle (OpenNext) and dry-runs the deploy, so the
+    # deploy path can't silently break. Nothing is deployed from CI.
+    name: cloudflare · worker bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build the Worker bundle (OpenNext)
+        run: npm run cf:build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Validate the Worker (dry run, no deploy)
+        run: npx wrangler deploy --dry-run --outdir .wrangler/dry-run
+        env:
+          WRANGLER_SEND_METRICS: "false"
