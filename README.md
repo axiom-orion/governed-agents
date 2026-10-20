@@ -9,15 +9,21 @@ agent proposes: the gate **allows**, **blocks**, or **routes for human approval*
 _before_ anything runs, with scored provenance and an auditable, streamed trace of
 exactly what happened and why.
 
-**▶ Live demo: [governed-agents.vercel.app](https://governed-agents.vercel.app)** —
-land, click **“Watch it block a risky action,”** then edit a policy threshold and
-re-run to watch the same action flip from **blocked** to **allowed**. Zero setup;
-the agents call a current Claude model server-side.
+**▶ Run it locally — no API key needed:**
+
+```bash
+npm ci && npm run dev   # then open http://localhost:3000
+```
+
+Click **“Watch it block a risky action,”** then edit a policy threshold and re-run to
+watch the same action flip from **blocked** to **allowed**. Without an
+`ANTHROPIC_API_KEY`, a deterministic offline stub stands in for the models; with one,
+the agents call a current Claude model server-side. (The hosted demo is temporarily
+offline.)
 
 ![Architecture: Researcher → Reasoner → Governance gate → allow / block / needs-approval, streamed as NDJSON to the UI](docs/architecture.svg)
 
-> 🎥 **90-second walkthrough:** _placeholder — add link here._
-> <!-- Record a short Loom/YouTube clip (watch-it-block → edit policy → flip → raw trace) and drop the URL above. -->
+<!-- 90-second walkthrough: record a short Loom/YouTube clip (watch-it-block → edit policy → flip → raw trace) and add the link here. -->
 
 ---
 
@@ -115,7 +121,7 @@ strongest case against the action; the gate refuses to honor its verdict if the
 voices collapse, and parks any objection for a human. Honest scope: for API-backed
 voices this attests what we *configured and called* — it cannot see through a
 provider's internal routing, and that residual trust is named, not papered over.
-Verified headlessly (32 checks, zero keys): `npx tsx scripts/verify-governance.ts`.
+Verified headlessly with zero keys: `npx tsx scripts/verify-governance.ts` (or `npm test` for every offline suite).
 
 Both are **glass-boxed in the trace UI**: the consensus panel shows each vote's attested
 `provider/model` and flags an *echo* (agreeing votes that resolve to one instance); a Red
@@ -285,7 +291,7 @@ npm run trace          # stream a real NDJSON audit trace of a governed run
 ## Composed in production
 
 The `evaluatePolicy` + `TraceEvent` contract here is ported into a live consumer:
-[**cason-heritage**](https://github.com/axiom-orion/cason-heritage) ([flcason.com](https://flcason.com)).
+**cason-heritage**, live at [flcason.com](https://flcason.com).
 Its genealogy "Keeper" decides every proposed record with the same typed gate
 (allow / needs-approval / block, named rules with thresholds) and writes the same
 NDJSON `TraceEvent` audit trail — the gate and the glass-box you can watch in the demo

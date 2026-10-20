@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mjs",
     "check:model": "tsx scripts/check-model.ts",
     "check:providers": "tsx scripts/check-providers.ts",
     "verify:governance": "tsx scripts/verify-governance.ts",

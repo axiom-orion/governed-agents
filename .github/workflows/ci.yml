@@ -34,7 +34,7 @@ jobs:
       - name: Trace projection contract (P4 UI)
         run: npx tsx scripts/verify-trace.ts
 
-      - name: Attested independence + Red Cell (32 checks, zero keys)
+      - name: Attested independence + Red Cell (zero keys)
         run: npx tsx scripts/verify-governance.ts
         env:
           AGENTS_OFFLINE: "1"
