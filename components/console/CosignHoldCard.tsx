@@ -94,14 +94,14 @@ export function CosignHoldCard({ hold, onResolved }: CosignHoldCardProps) {
   return (
     <article
       className={
-        "rounded-lg border border-l-4 border-slate-200 bg-white p-4 shadow-sm transition-colors " +
+        "rounded-lg border border-l-4 border-slate-200 bg-white p-4 shadow-xs transition-colors " +
         (FRAME[frameKey] ?? "border-l-slate-300")
       }
     >
       <header className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2">
-            <span className="rounded bg-slate-900 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-white">
+            <span className="rounded-sm bg-slate-900 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-white">
               {hold.actionType}
             </span>
             <span className="font-mono text-xs text-slate-400">{hold.agentCarId}</span>
@@ -135,7 +135,7 @@ export function CosignHoldCard({ hold, onResolved }: CosignHoldCardProps) {
             type="button"
             onClick={() => decide("REJECT")}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-1 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-1 disabled:opacity-50"
           >
             <span aria-hidden="true">✕</span> Reject merge
           </button>
@@ -143,7 +143,7 @@ export function CosignHoldCard({ hold, onResolved }: CosignHoldCardProps) {
             type="button"
             onClick={() => decide("APPROVE")}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1 disabled:opacity-50"
           >
             <span aria-hidden="true">✓</span> Approve merge
           </button>

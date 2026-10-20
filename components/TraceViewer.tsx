@@ -535,7 +535,7 @@ export function TraceViewer() {
                 type="checkbox"
                 checked={injectNoise}
                 onChange={(e) => setInjectNoise(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-300"
+                className="h-3.5 w-3.5 rounded-sm border-slate-300"
               />
               Inject malformed lines
             </label>

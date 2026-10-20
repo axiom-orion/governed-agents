@@ -183,7 +183,7 @@ export function GuidedWalkthrough({
                   : isAha && allowed && state !== "pending"
                     ? "border-emerald-300 bg-emerald-50"
                     : state === "active"
-                      ? "border-blue-300 bg-blue-50 shadow-sm"
+                      ? "border-blue-300 bg-blue-50 shadow-xs"
                       : state === "done"
                         ? "border-slate-200 bg-white"
                         : "border-dashed border-slate-200 bg-white opacity-55",
