@@ -179,7 +179,7 @@ npm run dev                  # http://localhost:3000
 # headless / CI
 npm run typecheck            # strict TS, no `any`
 npm run check:model          # verify the configured Claude model ids are current
-npx tsx scripts/verify-trace.ts   # projection + parser + policy-flip contract (52 checks)
+npx tsx scripts/verify-trace.ts   # projection + parser + policy-flip contract
 AGENTS_OFFLINE=1 npm run demo     # run the seed tasks and print the stream (allow + block)
 ```
 
