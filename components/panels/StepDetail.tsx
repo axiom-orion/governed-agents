@@ -27,14 +27,14 @@ function ActionDetail({ action }: { action: ProposedAction }) {
   return (
     <div className="rounded-md border border-violet-200 bg-violet-50/60 p-3">
       <div className="flex items-center gap-2">
-        <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
+        <span className="rounded-sm bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
           proposed action
         </span>
         <code className="font-mono text-xs text-slate-700">{action.kind}</code>
       </div>
       <p className="mt-2 text-sm leading-snug text-slate-700">{action.justification}</p>
       {Object.keys(action.payload).length > 0 ? (
-        <pre className="mt-2 overflow-x-auto rounded bg-white/70 p-2 text-[11px] leading-relaxed text-slate-600">
+        <pre className="mt-2 overflow-x-auto rounded-sm bg-white/70 p-2 text-[11px] leading-relaxed text-slate-600">
           {JSON.stringify(action.payload, null, 2)}
         </pre>
       ) : null}

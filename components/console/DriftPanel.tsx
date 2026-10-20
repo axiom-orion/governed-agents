@@ -46,7 +46,7 @@ export function DriftPanel({ event }: { event: DriftEvent }) {
   return (
     <section
       aria-label="Drift detection"
-      className="rounded-lg border border-red-300 bg-white shadow-sm"
+      className="rounded-lg border border-red-300 bg-white shadow-xs"
     >
       <header className="flex items-center justify-between gap-2 rounded-t-lg border-b border-red-200 bg-red-50 px-4 py-2.5">
         <div className="flex items-center gap-2">
@@ -60,7 +60,7 @@ export function DriftPanel({ event }: { event: DriftEvent }) {
         <div className="flex flex-wrap items-center gap-2">
           <span
             className={
-              "rounded px-2 py-0.5 text-[11px] font-semibold " +
+              "rounded-sm px-2 py-0.5 text-[11px] font-semibold " +
               (weight ? "bg-indigo-100 text-indigo-800" : "bg-slate-100 text-slate-700")
             }
           >

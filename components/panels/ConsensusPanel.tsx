@@ -86,7 +86,7 @@ export function ConsensusPanel({
             ) : (
               <code
                 className={
-                  "rounded px-1.5 py-0.5 text-[11px] font-medium " +
+                  "rounded-sm px-1.5 py-0.5 text-[11px] font-medium " +
                   (vote.kind === consensus.chosenKind
                     ? "bg-emerald-100 text-emerald-700"
                     : "bg-amber-100 text-amber-800")

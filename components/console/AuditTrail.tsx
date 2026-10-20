@@ -9,7 +9,7 @@ import type { AuditRow } from "./CosignHoldCard";
 
 export function AuditTrail({ rows }: { rows: readonly AuditRow[] }) {
   return (
-    <section aria-label="Audit trail" className="rounded-lg border border-slate-200 bg-white shadow-sm">
+    <section aria-label="Audit trail" className="rounded-lg border border-slate-200 bg-white shadow-xs">
       <header className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
         <h2 className="text-sm font-semibold text-slate-900">Truth Chain</h2>
         <span className="text-[11px] text-slate-400">append-only · hash-linked</span>

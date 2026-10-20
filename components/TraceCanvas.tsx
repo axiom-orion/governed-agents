@@ -99,7 +99,7 @@ function chipClasses(node: TraceNode): string {
 
 function cardClasses(node: TraceNode, selected: boolean): string {
   const base =
-    "flex h-full w-full flex-col justify-center overflow-hidden rounded-lg border bg-white px-3 py-2.5 shadow-sm transition-colors";
+    "flex h-full w-full flex-col justify-center overflow-hidden rounded-lg border bg-white px-3 py-2.5 shadow-xs transition-colors";
   const ring = selected ? " ring-2 ring-blue-500 ring-offset-1" : "";
   if (node.kind === "gate") return base + gateTone(node.decision.decision).border + ring;
   if (node.kind === "halt") return base + " border-red-300 bg-red-50" + ring;
@@ -132,14 +132,14 @@ function TraceFlowNode({ data }: NodeProps<FlowNode>) {
       }}
       className={
         cardClasses(node, selected) +
-        " cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1"
+        " cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1"
       }
     >
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-slate-300" />
+      <Handle type="target" position={Position.Left} className="h-2! w-2! border-0! bg-slate-300!" />
       <div className="flex items-center justify-between gap-2">
         <span
           className={
-            "rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide " +
+            "rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide " +
             chipClasses(node)
           }
         >
@@ -165,7 +165,7 @@ function TraceFlowNode({ data }: NodeProps<FlowNode>) {
           {nodeBody(node)}
         </p>
       </div>
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-slate-300" />
+      <Handle type="source" position={Position.Right} className="h-2! w-2! border-0! bg-slate-300!" />
     </div>
   );
 }

@@ -12,7 +12,7 @@ function AttestationBadge({ agent }: { agent: AgentState }) {
   return (
     <span
       className={
-        "rounded px-1.5 py-0.5 text-[10px] font-medium " +
+        "rounded-sm px-1.5 py-0.5 text-[10px] font-medium " +
         (weight ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-500")
       }
       title={
@@ -50,7 +50,7 @@ export function FleetRail({ agents }: { agents: readonly AgentState[] }) {
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold text-slate-800">{agent.name}</span>
-                  <span className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[10px] font-semibold text-slate-500">
+                  <span className="rounded-sm bg-slate-100 px-1 py-0.5 font-mono text-[10px] font-semibold text-slate-500">
                     {agent.tier}
                   </span>
                 </div>

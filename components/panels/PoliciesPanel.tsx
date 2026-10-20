@@ -19,7 +19,7 @@ function DecisionTag({ decision }: { decision: Decision }) {
   return (
     <span
       className={
-        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold " +
+        "inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-semibold " +
         (allowed ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800")
       }
     >
@@ -101,7 +101,7 @@ export function PoliciesPanel({
             <code className="font-mono text-xs font-semibold text-slate-700">
               require-provenance
             </code>
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+            <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
               always on
             </span>
           </div>
@@ -144,7 +144,7 @@ export function PoliciesPanel({
               value={threshold}
               onChange={(e) => onThresholdChange(Number(e.target.value))}
               aria-label="Confidence threshold (numeric)"
-              className="w-16 rounded border border-slate-300 px-1.5 py-1 text-right font-mono text-xs tabular-nums text-slate-700"
+              className="w-16 rounded-sm border border-slate-300 px-1.5 py-1 text-right font-mono text-xs tabular-nums text-slate-700"
             />
           </div>
 
@@ -198,7 +198,7 @@ export function PoliciesPanel({
               value={consensusThreshold}
               onChange={(e) => onConsensusChange(Number(e.target.value))}
               aria-label="Agreement threshold (numeric)"
-              className="w-16 rounded border border-slate-300 px-1.5 py-1 text-right font-mono text-xs tabular-nums text-slate-700"
+              className="w-16 rounded-sm border border-slate-300 px-1.5 py-1 text-right font-mono text-xs tabular-nums text-slate-700"
             />
           </div>
 
