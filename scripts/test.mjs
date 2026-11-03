@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 const SUITES = [
   { name: "Trace projection contract", script: "scripts/verify-trace.ts" },
   { name: "Attested independence + Red Cell", script: "scripts/verify-governance.ts" },
+  { name: "Policy edge cases (PII · scores · kinds · approvals)", script: "scripts/verify-policy.ts" },
   {
     name: "Cosign intervention surface",
     script: "scripts/verify-cosign.ts",

@@ -82,6 +82,8 @@ when it passes. To add one:
    blocks if **any** rule returns a violation.
 4. If you want a runnable demonstration, add a seed task to `lib/tasks.ts` whose `expected`
    outcome exercises the new rule, then verify with `npm run demo`.
+5. Add the rule's edge cases to `scripts/verify-policy.ts` — both the inputs it must catch
+   and the routine inputs it must let through — so `npm test` pins its behavior.
 
 `lib/governance.ts` is a **frozen contract owned by the loop** — extend the example policy set,
 but do not change the shapes of `ProposedAction`, `PolicyDecision`, `PolicyViolation`, or the
