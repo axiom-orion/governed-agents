@@ -115,10 +115,11 @@ Thresholds are explicit:
 
 | Rule | Applies to | Decides |
 |---|---|---|
-| `require-provenance` | every action | **block** if no supporting sources |
-| `no-unverified-external-send` | outbound `send_email` | **block** unless some source ≥ the confidence threshold (default **0.70**) |
-| `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data (SSN / card / phone) |
-| `destructive-action-needs-approval` | `delete_record` / destructive kinds | **needs-approval** unless an approval token is attached |
+| `known-action-kind` | every action | **block** if the kind is outside `KNOWN_ACTION_KINDS` (`send_email`, `write_record`, destructive kinds) — the kind-specific rules can't judge it, so it fails closed |
+| `require-provenance` | every action | **block** if no supporting source carries a valid score (finite, in [0, 1]) |
+| `no-unverified-external-send` | outbound `send_email` | **block** unless some validly-scored source ≥ the confidence threshold (default **0.70**) |
+| `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data: US SSN (dashed, spaced, or labelled), card, US/international phone, IBAN (mod-97 verified), UK sort code + account, labelled account number. Ambiguous shapes are context-gated so dates and order ids pass |
+| `destructive-action-needs-approval` | `delete_record` / destructive kinds | **needs-approval** unless `payload.approvalToken` matches a retrieved approval record (`ticket:<token>`, valid score). Provenance comes from retrieval, so a bare `approved: true` or an unmatched token routes to a human |
 | `require-model-consensus` | multi-model (triad) runs | **needs-approval** when model agreement falls below the threshold (default **100%**, unanimous) |
 | `require-distinct-voices` | multi-model (triad) runs | **needs-approval** when agreeing votes resolve to < 2 distinct attested instances (`minDistinctVoices`) |
 | `red-cell-independence` | red-cell-reviewed actions | **needs-approval** when reviewer ≡ generator, or the generator is unattested |

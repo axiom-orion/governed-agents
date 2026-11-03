@@ -139,12 +139,28 @@ export interface PolicyConfig {
   readonly minDistinctVoices?: number;
 }
 
+/**
+ * A retrieval score counts as evidence only when it is a finite number in [0, 1] — the
+ * range `Provenance.score` promises. NaN, ±Infinity or an out-of-range value (5.0) is
+ * malformed, and malformed evidence never clears a threshold: unverifiable is not verified.
+ */
+export function isValidScore(score: unknown): score is number {
+  return typeof score === "number" && Number.isFinite(score) && score >= 0 && score <= 1;
+}
+
 export const requireProvenance: PolicyRule = {
   name: "require-provenance",
-  evaluate: (a) =>
-    a.provenance.length === 0
-      ? { rule: "require-provenance", detail: "action has no supporting sources" }
-      : null,
+  evaluate: (a) => {
+    if (a.provenance.length === 0) {
+      return { rule: "require-provenance", detail: "action has no supporting sources" };
+    }
+    return a.provenance.some((p) => isValidScore(p.score))
+      ? null
+      : {
+          rule: "require-provenance",
+          detail: "no supporting source carries a valid retrieval score in [0, 1]",
+        };
+  },
 };
 
 /**
@@ -161,7 +177,9 @@ export function makeNoUnverifiedExternalSend(
     evaluate: (a) => {
       if (a.kind !== "send_email") return null;
       const to = typeof a.payload.to === "string" ? a.payload.to : "";
-      const hasHighConfidenceSource = a.provenance.some((p) => p.score >= threshold);
+      const hasHighConfidenceSource = a.provenance.some(
+        (p) => isValidScore(p.score) && p.score >= threshold,
+      );
       return to.length > 0 && !hasHighConfidenceSource
         ? {
             rule: "no-unverified-external-send",
@@ -175,12 +193,94 @@ export function makeNoUnverifiedExternalSend(
 /** The outbound-send rule at the default threshold (kept for the frozen contract). */
 export const noUnverifiedExternalSend: PolicyRule = makeNoUnverifiedExternalSend();
 
-// Light, illustrative PII signatures. Real systems would use a vetted detector;
-// these are enough to make the policy behavior legible in the demo.
-const PII_SIGNATURES: ReadonlyArray<{ readonly label: string; readonly re: RegExp }> = [
-  { label: "US Social Security number", re: /\b\d{3}-\d{2}-\d{4}\b/u },
-  { label: "credit-card number", re: /\b(?:\d[ -]?){15,16}\b/u },
-  { label: "phone number", re: /\b\d{3}[.\-]\d{3}[.\-]\d{4}\b/u },
+// PII signatures. Still a pattern list, not a vetted detector (production should put a
+// DLP / PII service behind this rule), but it covers the formats a financial-services
+// email actually leaks: US and UK identifiers, international phones, and bank details.
+// Ambiguous shapes are context-gated so routine numbers don't trip the gate: a bare
+// 9-digit run is an SSN only when labelled, and a dd-dd-dd run is a sort code only when
+// labelled or sitting next to an 8-digit account number (otherwise it is likely a date).
+
+/** One detector; `found` is pure. Every regex below carries the `g` flag for `matchAll`. */
+interface PiiSignature {
+  readonly label: string;
+  readonly found: (text: string) => boolean;
+}
+
+/** A regex detector, optionally confirmed per match (e.g. a digit-count or checksum test). */
+function byPattern(re: RegExp, valid?: (match: string) => boolean): (text: string) => boolean {
+  return (text) => {
+    for (const m of text.matchAll(re)) {
+      if (valid === undefined || valid(m[0])) return true;
+    }
+    return false;
+  };
+}
+
+const digitCount = (s: string): number => s.replace(/\D/gu, "").length;
+
+/** ISO 13616 mod-97 check: the number formed by BBAN + country + check digits ≡ 1 (mod 97). */
+function isValidIban(compact: string): boolean {
+  const iban = compact.toUpperCase();
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/u.test(iban)) return false;
+  const rearranged = iban.slice(4) + iban.slice(0, 4);
+  let remainder = 0;
+  for (const ch of rearranged) {
+    // Letters expand to two digits (A = 10 … Z = 35); fold digit by digit to stay in range.
+    const expanded = /[A-Z]/u.test(ch) ? String(ch.charCodeAt(0) - 55) : ch;
+    for (const digit of expanded) remainder = (remainder * 10 + Number(digit)) % 97;
+  }
+  return remainder === 1;
+}
+
+/** IBANs appear compact or in groups of four; join up to 9 adjacent tokens and checksum each prefix. */
+function containsIban(text: string): boolean {
+  const tokens = text
+    .split(/\s+/u)
+    .map((t) => t.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/gu, ""))
+    .filter((t) => t.length > 0);
+  for (let i = 0; i < tokens.length; i++) {
+    if (!/^[A-Za-z]{2}\d{2}/u.test(tokens[i] ?? "")) continue;
+    let candidate = "";
+    for (let j = i; j < tokens.length && j < i + 9; j++) {
+      candidate += tokens[j] ?? "";
+      if (candidate.length > 34) break;
+      if (candidate.length >= 15 && isValidIban(candidate)) return true;
+    }
+  }
+  return false;
+}
+
+const PII_SIGNATURES: readonly PiiSignature[] = [
+  {
+    label: "US Social Security number",
+    found: (text) =>
+      byPattern(/\b\d{3}[- ]\d{2}[- ]\d{4}\b/gu)(text) ||
+      byPattern(/\b(?:ssn|social\s+security(?:\s+(?:number|no))?)\b[^\d]{0,20}\d{9}\b/giu)(text),
+  },
+  { label: "credit-card number", found: byPattern(/\b(?:\d[ -]?){15,16}\b/gu) },
+  { label: "IBAN", found: containsIban },
+  {
+    label: "UK sort code and account number",
+    found: (text) =>
+      byPattern(/\bsort[\s-]*code\b[^\d]{0,12}\d{2}[- ]?\d{2}[- ]?\d{2}\b/giu)(text) ||
+      byPattern(/\b\d{2}-\d{2}-\d{2}\b[^\d]{0,24}\b\d{8}\b/gu)(text) ||
+      byPattern(/\b\d{8}\b[^\d]{0,24}\b\d{2}-\d{2}-\d{2}\b/gu)(text),
+  },
+  {
+    label: "bank account number",
+    found: byPattern(/\b(?:account|acct)\.?(?:\s*(?:no\.?|number|num|#))?[\s:#]*\d{6,17}\b/giu),
+  },
+  {
+    label: "phone number",
+    found: (text) =>
+      // North American: 555-123-4567 · 555.123.4567 · 555 123 4567 · (555) 123-4567
+      byPattern(/(?:\(\d{3}\)\s?|\b\d{3}[ .-])\d{3}[ .-]\d{4}\b/gu)(text) ||
+      // International with a leading +: +44 20 7946 0958 (8–15 digits, E.164's limit)
+      byPattern(/\+\d{1,3}(?:[ .-]?\d{2,4}){2,4}\b/gu, (m) => {
+        const n = digitCount(m);
+        return n >= 8 && n <= 15;
+      })(text),
+  },
 ];
 
 function payloadText(payload: Readonly<Record<string, unknown>>): string {
@@ -195,7 +295,7 @@ export const noPiiInExternalOutput: PolicyRule = {
   evaluate: (a) => {
     if (a.kind !== "send_email") return null;
     const text = payloadText(a.payload);
-    const hit = PII_SIGNATURES.find((s) => s.re.test(text));
+    const hit = PII_SIGNATURES.find((s) => s.found(text));
     return hit
       ? {
           rule: "no-pii-in-external-output",
@@ -224,18 +324,64 @@ export function isConsequentialKind(kind: string): boolean {
   return kind === "send_email" || DESTRUCTIVE_KINDS.has(kind);
 }
 
-function isApproved(payload: Readonly<Record<string, unknown>>): boolean {
-  return payload.approved === true || typeof payload.approvalToken === "string";
+/**
+ * Every action kind the gate knows how to judge. The kind-specific rules above are written
+ * against these; a kind outside the set would slip past all of them, so it is blocked
+ * instead of trusted (see {@link knownActionKind}).
+ */
+export const KNOWN_ACTION_KINDS: ReadonlySet<string> = new Set([
+  "send_email",
+  "write_record",
+  ...DESTRUCTIVE_KINDS,
+]);
+
+/** Fail closed on action kinds the policy was never written for. */
+export const knownActionKind: PolicyRule = {
+  name: "known-action-kind",
+  evaluate: (a) =>
+    KNOWN_ACTION_KINDS.has(a.kind)
+      ? null
+      : {
+          rule: "known-action-kind",
+          detail: `"${a.kind}" is not a kind this policy knows how to judge — unknown kinds are blocked, not trusted`,
+        },
+};
+
+/** Provenance `sourceId` prefix under which a retrieved approval record is filed. */
+export const APPROVAL_SOURCE_PREFIX = "ticket:";
+
+function approvalTokenOf(payload: Readonly<Record<string, unknown>>): string | undefined {
+  const token = payload.approvalToken;
+  return typeof token === "string" && token.trim().length > 0 ? token : undefined;
 }
 
-/** Route destructive/irreversible actions to a human unless an approval is attached. */
+/**
+ * An approval is honored only when it is grounded in retrieval: the action's token must
+ * match an approval record (`ticket:<token>`, with a valid score) among the sources the
+ * Researcher retrieved. Provenance comes from retrieval, never from the model, so the
+ * proposer cannot approve its own action — a bare `approved: true`, an empty token, or a
+ * token with no matching record all route to a human. This is grounding, not a signature:
+ * a production approval should also be verified against the approvals system itself.
+ */
+function hasRetrievedApproval(a: ProposedAction): boolean {
+  const token = approvalTokenOf(a.payload);
+  if (token === undefined) return false;
+  const record = `${APPROVAL_SOURCE_PREFIX}${token}`;
+  return a.provenance.some((p) => p.sourceId === record && isValidScore(p.score));
+}
+
+/** Route destructive/irreversible actions to a human unless a retrieved approval backs them. */
 export const destructiveNeedsApproval: PolicyRule = {
   name: "destructive-action-needs-approval",
   evaluate: (a) => {
-    if (!DESTRUCTIVE_KINDS.has(a.kind) || isApproved(a.payload)) return null;
+    if (!DESTRUCTIVE_KINDS.has(a.kind) || hasRetrievedApproval(a)) return null;
+    const token = approvalTokenOf(a.payload);
     return {
       rule: "destructive-action-needs-approval",
-      detail: `${a.kind} is irreversible and requires human approval before it runs`,
+      detail:
+        token === undefined
+          ? `${a.kind} is irreversible and requires human approval before it runs`
+          : `${a.kind} is irreversible; approval token "${token}" matches no retrieved approval record (${APPROVAL_SOURCE_PREFIX}${token}), so a human must approve it`,
       severity: "review",
     };
   },
@@ -375,6 +521,7 @@ export const redCellObjection: PolicyRule = {
 /** Assemble the active policy from a config; rule order is stable. */
 export function buildPolicy(config: PolicyConfig = {}): readonly PolicyRule[] {
   return [
+    knownActionKind,
     requireProvenance,
     makeNoUnverifiedExternalSend(config.externalSendThreshold),
     noPiiInExternalOutput,

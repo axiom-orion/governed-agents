@@ -39,6 +39,11 @@ jobs:
         env:
           AGENTS_OFFLINE: "1"
 
+      - name: Policy edge cases — PII formats, score validity, unknown kinds, grounded approvals
+        run: npx tsx scripts/verify-policy.ts
+        env:
+          AGENTS_OFFLINE: "1"
+
       - name: Cosign intervention surface (round-trip · audit chain · fail-closed · drift)
         run: npm run verify:cosign
         env:
