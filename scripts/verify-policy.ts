@@ -20,6 +20,7 @@ import {
   APPROVAL_SOURCE_PREFIX,
   DESTRUCTIVE_KINDS,
   KNOWN_ACTION_KINDS,
+  MAX_SCANNED_CHARS,
   buildPolicy,
   evaluatePolicy,
   isValidScore,
@@ -120,10 +121,10 @@ const leaks: ReadonlyArray<readonly [string, string, string]> = [
   ["phone, +44 dotted and run on into a number", "Ring +44.20.7946.0958.1234.", PHONE],
   ["card, 13-digit Visa passing Luhn", "Card 4222222222222.", CARD],
   ["card, 19-digit passing Luhn", "Card 6304000000000000000.", CARD],
-  ["SSN, full-width digits", "SSN １２３-４５-６７８９.", SSN],
-  ["SSN, en-dashes", "SSN 123–45–6789.", SSN],
-  ["SSN, zero-width space inside", "SSN 123-4​5-6789.", SSN],
-  ["SSN, no-break spaces", "SSN 123 45 6789.", SSN],
+  ["SSN, full-width digits", "SSN \uFF11\uFF12\uFF13-\uFF14\uFF15-\uFF16\uFF17\uFF18\uFF19.", SSN],
+  ["SSN, en-dashes", "SSN 123\u201345\u20136789.", SSN],
+  ["SSN, zero-width space inside", "SSN 123-4\u200B5-6789.", SSN],
+  ["SSN, no-break spaces", "SSN 123\u00A045\u00A06789.", SSN],
 ];
 for (const [label, body, signature] of leaks) {
   expectDecision(`PII blocks: ${label}`, email(body), "block", PII, signature);
@@ -158,9 +159,17 @@ expectDecision(
   PII,
   SSN,
 );
+// The size cap, pinned on both sides: a payload whose only text is the body scans exactly
+// that many characters.
+const bodyOnly = (length: number): ProposedAction => ({
+  ...email("hi"),
+  payload: { body: "x".repeat(length) },
+});
+const piiRuleFired = (a: ProposedAction): boolean => gate(a).violations.some((v) => v.rule === PII);
+check("PII scan: a payload at the size cap is scanned, not refused", !piiRuleFired(bodyOnly(MAX_SCANNED_CHARS)));
 expectDecision(
-  "PII blocks: a payload too large to scan fails closed",
-  email("x".repeat(100_001)),
+  "PII blocks: a payload one character over the cap fails closed",
+  bodyOnly(MAX_SCANNED_CHARS + 1),
   "block",
   PII,
   "too large to scan",

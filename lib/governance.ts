@@ -262,6 +262,14 @@ const IBAN_MIN_BBAN_DIGITS = 8;
 /** E.164 numbers carry at least 8 digits with country code; fewer is a short code or a score. */
 const PHONE_MIN_DIGITS = 8;
 
+/** ISO 7064 mod-97-10: a valid IBAN leaves remainder 1. */
+const IBAN_MODULUS = 97;
+const IBAN_VALID_REMAINDER = 1;
+/** IBAN letters expand to two digits, A = 10 … Z = 35. */
+const IBAN_LETTER_OFFSET = "A".charCodeAt(0) - 10;
+/** Luhn: the digit sum, with every second digit from the right doubled, is a multiple of 10. */
+const LUHN_MODULUS = 10;
+
 const digitCount = (s: string): number => s.replace(/\D/gu, "").length;
 const hasPhoneDigits = (match: string): boolean => digitCount(match) >= PHONE_MIN_DIGITS;
 
@@ -272,14 +280,13 @@ function isValidIban(compact: string): boolean {
   if (!/^[A-Z]{2}\d{2}[A-Z0-9]+$/u.test(iban)) return false;
   if (digitCount(iban.slice(4)) < IBAN_MIN_BBAN_DIGITS) return false;
   const rearranged = iban.slice(4) + iban.slice(0, 4);
-  const LETTER_OFFSET = "A".charCodeAt(0) - 10; // so that A → 10
   let remainder = 0;
   for (const ch of rearranged) {
-    const expanded = /[A-Z]/u.test(ch) ? String(ch.charCodeAt(0) - LETTER_OFFSET) : ch;
+    const expanded = /[A-Z]/u.test(ch) ? String(ch.charCodeAt(0) - IBAN_LETTER_OFFSET) : ch;
     // Fold digit by digit so the running value never exceeds safe-integer range.
-    for (const digit of expanded) remainder = (remainder * 10 + Number(digit)) % 97;
+    for (const digit of expanded) remainder = (remainder * 10 + Number(digit)) % IBAN_MODULUS;
   }
-  return remainder === 1;
+  return remainder === IBAN_VALID_REMAINDER;
 }
 
 /**
@@ -306,24 +313,25 @@ function containsIban(text: string): boolean {
   return false;
 }
 
-/** Luhn (mod-10) check over the digits of a card-number candidate. */
+/** Luhn check over the digits of a card-number candidate. */
 function passesLuhn(match: string): boolean {
   const digits = match.replace(/\D/gu, "");
   let sum = 0;
   for (let k = 0; k < digits.length; k++) {
     let d = Number(digits[digits.length - 1 - k]);
-    if (k % 2 === 1) {
+    const doubled = k % 2 === 1; // every second digit, counting from the rightmost
+    if (doubled) {
       d *= 2;
-      if (d > 9) d -= 9;
+      if (d > 9) d -= 9; // the sum of the doubled digit's two digits
     }
     sum += d;
   }
-  return sum % 10 === 0;
+  return sum % LUHN_MODULUS === 0;
 }
 
 // Ordered most-specific first: the first signature that fires names the violation, so a
 // checksum-verified IBAN or a +-prefixed phone is reported as itself, not as the card or
-// SSN shape a run of its digits also happens to fit.
+// SSN shape a run of its digits also happens to fit ("+353 86 1234" holds an SSN shape).
 const PII_SIGNATURES: readonly PiiSignature[] = [
   { label: "IBAN", found: containsIban },
   {
@@ -337,6 +345,9 @@ const PII_SIGNATURES: readonly PiiSignature[] = [
       byPattern(/\b00\d{1,3}(?:[ .-](?:\(0\)[ .-]?)?\d{1,4}){2,6}/gu, hasPhoneDigits),
       // UK mobile, national format: 07700 900123 · 07700900123
       byPattern(/\b07\d{3}[ ]?\d{6}\b/gu),
+      // North American: 555-123-4567 · 555.123.4567 · 555 123 4567 · (555) 123-4567. A
+      // spaced 3-3-4 run is ambiguous ("120 450 1000 units"); the gate fails closed on it.
+      byPattern(/(?:\(\d{3}\)\s?|\b\d{3}[ .-])\d{3}[ .-]\d{4}\b/gu),
     ),
   },
   {
@@ -378,12 +389,6 @@ const PII_SIGNATURES: readonly PiiSignature[] = [
       /\b(?:account|acct|a\/c)\b(?:\s*(?:number|num|no|id|is|#|:|\.)){0,4}\s*\d{6,17}\b/giu,
     ),
   },
-  {
-    label: "phone number",
-    // North American: 555-123-4567 · 555.123.4567 · 555 123 4567 · (555) 123-4567. A spaced
-    // 3-3-4 run is ambiguous ("120 450 1000 units"); the gate fails closed on that shape.
-    found: byPattern(/(?:\(\d{3}\)\s?|\b\d{3}[ .-])\d{3}[ .-]\d{4}\b/gu),
-  },
 ];
 
 /** Nested payload values are scanned down to this depth (arrays and objects alike). */
@@ -393,7 +398,7 @@ const MAX_PAYLOAD_DEPTH = 4;
  * the model's output budget (well under this); anything larger fails closed rather than
  * stalling the synchronous gate or leaving a tail unscanned.
  */
-const MAX_SCANNED_CHARS = 100_000;
+export const MAX_SCANNED_CHARS = 100_000;
 
 /** Every string in the payload, including inside arrays and nested objects. */
 function collectStrings(value: unknown, depth: number, out: string[]): void {
@@ -411,8 +416,8 @@ function collectStrings(value: unknown, depth: number, out: string[]): void {
 function normalizeForScan(text: string): string {
   return text
     .normalize("NFKC")
-    .replace(/[​-‍⁠﻿­]/gu, "")
-    .replace(/[‐-―−]/gu, "-");
+    .replace(/[\u200B-\u200D\u2060\uFEFF\u00AD]/gu, "")
+    .replace(/[\u2010-\u2015\u2212]/gu, "-");
 }
 
 function payloadText(payload: Readonly<Record<string, unknown>>): string {
@@ -502,10 +507,11 @@ function approvalTokenOf(payload: Readonly<Record<string, unknown>>): string | u
 const approvalRecordId = (token: string): string => `${APPROVAL_SOURCE_PREFIX}${token}`;
 
 /**
- * The retrieval score an approval record must reach to count — the same bar an outbound
- * send needs by default. A ticket retrieved at score 0 is an irrelevant hit, not grounding.
+ * The retrieval score an approval record must reach to count. A ticket retrieved at score 0
+ * is an irrelevant hit, not grounding. Set to the same 0.70 as the default send threshold,
+ * but deliberately its own constant: moving the editable send knob must not move this bar.
  */
-export const APPROVAL_MIN_SCORE = DEFAULT_SEND_THRESHOLD;
+export const APPROVAL_MIN_SCORE = 0.7;
 
 /**
  * An approval is honored only when it is grounded in retrieval: the action's token must
