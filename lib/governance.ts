@@ -139,6 +139,14 @@ export interface PolicyConfig {
   readonly minDistinctVoices?: number;
 }
 
+/** Longest caller-supplied string (a kind, a token, a recipient) echoed into a violation. */
+const MAX_ECHO_LENGTH = 64;
+
+/** Bound a caller-supplied string before it is echoed into a violation's detail and trace. */
+function clip(s: string): string {
+  return s.length > MAX_ECHO_LENGTH ? `${s.slice(0, MAX_ECHO_LENGTH)}…` : s;
+}
+
 /**
  * A retrieval score counts as evidence only when it is a finite number in [0, 1] — the
  * range `Provenance.score` promises. NaN, ±Infinity or an out-of-range value (5.0) is
@@ -176,16 +184,25 @@ export function makeNoUnverifiedExternalSend(
     name: "no-unverified-external-send",
     evaluate: (a) => {
       if (a.kind !== "send_email") return null;
-      const to = typeof a.payload.to === "string" ? a.payload.to : "";
+      // An outbound send must name exactly one recipient the gate can see. A missing,
+      // blank or non-string `to` (an array, a recipient under another key) used to skip
+      // the threshold entirely — fail closed instead of judging a send we can't read.
+      const to = typeof a.payload.to === "string" ? a.payload.to.trim() : "";
+      if (to.length === 0) {
+        return {
+          rule: "no-unverified-external-send",
+          detail: "outbound send has no single recipient address (payload.to) the gate can verify",
+        };
+      }
       const hasHighConfidenceSource = a.provenance.some(
         (p) => isValidScore(p.score) && p.score >= threshold,
       );
-      return to.length > 0 && !hasHighConfidenceSource
-        ? {
+      return hasHighConfidenceSource
+        ? null
+        : {
             rule: "no-unverified-external-send",
-            detail: `outbound to ${to} lacks a source scoring ≥ ${threshold.toFixed(2)}`,
-          }
-        : null;
+            detail: `outbound to ${clip(to)} lacks a source scoring ≥ ${threshold.toFixed(2)}`,
+          };
     },
   };
 }
@@ -232,19 +249,28 @@ function byPattern(re: RegExp, isGenuine?: (match: string) => boolean): Detector
 /** ISO 13616: an IBAN is 15–34 characters — country (2) + check digits (2) + BBAN (11–30). */
 const IBAN_MIN_LENGTH = 15;
 const IBAN_MAX_LENGTH = 34;
-/** A grouped IBAN (`GB82 WEST 1234 …`) spans at most ⌈34 / 4⌉ = 9 whitespace-separated tokens. */
-const IBAN_MAX_TOKENS = Math.ceil(IBAN_MAX_LENGTH / 4);
-/** E.164: a full international number carries at most 15 digits; 8 rules out short codes. */
+/** Written grouped, an IBAN is 4-character groups with a 1–4 character tail. */
+const IBAN_GROUP_LENGTH = 4;
+/** A grouped IBAN spans at most ⌈34 / 4⌉ = 9 tokens. */
+const IBAN_MAX_TOKENS = Math.ceil(IBAN_MAX_LENGTH / IBAN_GROUP_LENGTH);
+/**
+ * Every national BBAN carries a numeric account part (the shortest, Norway's, is 11 digits).
+ * Requiring 8 BBAN digits keeps words that happen to follow a token like "FY26" or "EU27"
+ * from ever forming a checksum candidate — mod-97 alone would pass 1 in 97 of them.
+ */
+const IBAN_MIN_BBAN_DIGITS = 8;
+/** E.164 numbers carry at least 8 digits with country code; fewer is a short code or a score. */
 const PHONE_MIN_DIGITS = 8;
-const PHONE_MAX_DIGITS = 15;
 
 const digitCount = (s: string): number => s.replace(/\D/gu, "").length;
+const hasPhoneDigits = (match: string): boolean => digitCount(match) >= PHONE_MIN_DIGITS;
 
 /** ISO 7064 mod-97-10: BBAN + country + check digits, letters as A = 10 … Z = 35, ≡ 1 (mod 97). */
 function isValidIban(compact: string): boolean {
   const iban = compact.toUpperCase();
   if (iban.length < IBAN_MIN_LENGTH || iban.length > IBAN_MAX_LENGTH) return false;
   if (!/^[A-Z]{2}\d{2}[A-Z0-9]+$/u.test(iban)) return false;
+  if (digitCount(iban.slice(4)) < IBAN_MIN_BBAN_DIGITS) return false;
   const rearranged = iban.slice(4) + iban.slice(0, 4);
   const LETTER_OFFSET = "A".charCodeAt(0) - 10; // so that A → 10
   let remainder = 0;
@@ -256,67 +282,143 @@ function isValidIban(compact: string): boolean {
   return remainder === 1;
 }
 
-/** IBANs appear compact or in groups of four: join adjacent tokens and checksum each prefix. */
+/**
+ * IBANs appear compact (`GB82WEST1234…`), grouped (`GB82 WEST 1234 …`, `GB82-WEST-…`) or
+ * behind a label (`IBAN:GB82…`). Split on every non-alphanumeric run, then from each token
+ * shaped like a country + check digits, extend through following group-sized tokens only
+ * (a longer token ends the candidate) and checksum each prefix.
+ */
 function containsIban(text: string): boolean {
-  const tokens = text
-    .split(/\s+/u)
-    .map((t) => t.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/gu, ""))
-    .filter((t) => t.length > 0);
+  const tokens = text.split(/[^A-Za-z0-9]+/u).filter((t) => t.length > 0);
   for (let i = 0; i < tokens.length; i++) {
     if (!/^[A-Za-z]{2}\d{2}/u.test(tokens[i] ?? "")) continue;
     let candidate = "";
     for (let j = i; j < tokens.length && j < i + IBAN_MAX_TOKENS; j++) {
-      candidate += tokens[j] ?? "";
+      const token = tokens[j] ?? "";
+      if (j > i && token.length > IBAN_GROUP_LENGTH) break;
+      candidate += token;
       if (candidate.length > IBAN_MAX_LENGTH) break;
       if (isValidIban(candidate)) return true;
+      // Only the final group of a grouped IBAN may be short; "XI11 6811 173 4802" is not one.
+      if (j > i && token.length < IBAN_GROUP_LENGTH) break;
     }
   }
   return false;
 }
 
+/** Luhn (mod-10) check over the digits of a card-number candidate. */
+function passesLuhn(match: string): boolean {
+  const digits = match.replace(/\D/gu, "");
+  let sum = 0;
+  for (let k = 0; k < digits.length; k++) {
+    let d = Number(digits[digits.length - 1 - k]);
+    if (k % 2 === 1) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+// Ordered most-specific first: the first signature that fires names the violation, so a
+// checksum-verified IBAN or a +-prefixed phone is reported as itself, not as the card or
+// SSN shape a run of its digits also happens to fit.
 const PII_SIGNATURES: readonly PiiSignature[] = [
+  { label: "IBAN", found: containsIban },
+  {
+    label: "phone number",
+    found: anyOf(
+      // International with a leading +: +44 20 7946 0958 · +33 1 23 45 67 89 · +44 (0)20 …
+      // No digit maximum: a greedy match that runs on into a following number still blocks.
+      byPattern(/\+\d{1,3}(?:[ .-]?(?:\(0\)[ .-]?)?\d{1,4}){1,6}/gu, hasPhoneDigits),
+      // The same with a 00 international prefix (0044 20 …). A separator after the country
+      // code is required so zero-padded ids ("00123456") don't read as phones.
+      byPattern(/\b00\d{1,3}(?:[ .-](?:\(0\)[ .-]?)?\d{1,4}){2,6}/gu, hasPhoneDigits),
+      // UK mobile, national format: 07700 900123 · 07700900123
+      byPattern(/\b07\d{3}[ ]?\d{6}\b/gu),
+    ),
+  },
+  {
+    label: "credit-card number",
+    found: anyOf(
+      // 15–16 digits (Amex, Visa/Mastercard) block on shape alone, as before.
+      byPattern(/\b(?:\d[ -]?){15,16}\b/gu),
+      // 13–14 and 17–19 digits (older Visa, Diners, Maestro) only when they pass Luhn, so
+      // other long ids don't trip the gate on shape.
+      byPattern(/\b(?:\d[ -]?){12,13}\d\b/gu, passesLuhn),
+      byPattern(/\b(?:\d[ -]?){16,18}\d\b/gu, passesLuhn),
+    ),
+  },
   {
     label: "US Social Security number",
     found: anyOf(
-      byPattern(/\b\d{3}[- ]\d{2}[- ]\d{4}\b/gu), // 123-45-6789 · 123 45 6789
+      // 123-45-6789 · 123 45 6789. A spaced 3-2-4 run is ambiguous ("Room 123 45 6789");
+      // the gate fails closed and treats the exact SSN shape as an SSN.
+      byPattern(/\b\d{3}[- ]\d{2}[- ]\d{4}\b/gu),
       // A bare 9-digit run only when labelled — otherwise it is as likely an order id.
       byPattern(/\b(?:ssn|social\s+security(?:\s+(?:number|no))?)\b[^\d]{0,20}\d{9}\b/giu),
     ),
   },
-  { label: "credit-card number", found: byPattern(/\b(?:\d[ -]?){15,16}\b/gu) },
-  { label: "IBAN", found: containsIban },
   {
     label: "UK sort code",
     found: anyOf(
       byPattern(/\bsort[\s-]*code\b[^\d]{0,12}\d{2}[- ]?\d{2}[- ]?\d{2}\b/giu), // labelled
-      // Unlabelled dd-dd-dd only beside an 8-digit account number, either order.
-      byPattern(/\b\d{2}-\d{2}-\d{2}\b[^\d]{0,24}\b\d{8}\b/gu),
-      byPattern(/\b\d{8}\b[^\d]{0,24}\b\d{2}-\d{2}-\d{2}\b/gu),
+      // Unlabelled dd-dd-dd only directly beside an 8-digit account number (punctuation
+      // between them, no words) — "On 12-03-26 order 12345678" is a date and an order id.
+      byPattern(/\b\d{2}-\d{2}-\d{2}[^\dA-Za-z]{1,4}\d{8}\b/gu),
+      byPattern(/\b\d{8}[^\dA-Za-z]{1,4}\d{2}-\d{2}-\d{2}\b/gu),
     ),
   },
   {
     label: "bank account number",
-    // Labelled only; 6–17 digits spans UK (8) through the longest US account numbers.
-    found: byPattern(/\b(?:account|acct)\.?(?:\s*(?:no\.?|number|num|#))?[\s:#]*\d{6,17}\b/giu),
+    // Labelled only ("account number is …", "Account ID: …", "acct #…", "A/C …"); 6–17
+    // digits spans UK (8) through the longest US account numbers.
+    found: byPattern(
+      /\b(?:account|acct|a\/c)\b(?:\s*(?:number|num|no|id|is|#|:|\.)){0,4}\s*\d{6,17}\b/giu,
+    ),
   },
   {
     label: "phone number",
-    found: anyOf(
-      // North American: 555-123-4567 · 555.123.4567 · 555 123 4567 · (555) 123-4567
-      byPattern(/(?:\(\d{3}\)\s?|\b\d{3}[ .-])\d{3}[ .-]\d{4}\b/gu),
-      // International with a leading +: +44 20 7946 0958
-      byPattern(/\+\d{1,3}(?:[ .-]?\d{2,4}){2,4}\b/gu, (m) => {
-        const n = digitCount(m);
-        return n >= PHONE_MIN_DIGITS && n <= PHONE_MAX_DIGITS;
-      }),
-    ),
+    // North American: 555-123-4567 · 555.123.4567 · 555 123 4567 · (555) 123-4567. A spaced
+    // 3-3-4 run is ambiguous ("120 450 1000 units"); the gate fails closed on that shape.
+    found: byPattern(/(?:\(\d{3}\)\s?|\b\d{3}[ .-])\d{3}[ .-]\d{4}\b/gu),
   },
 ];
 
+/** Nested payload values are scanned down to this depth (arrays and objects alike). */
+const MAX_PAYLOAD_DEPTH = 4;
+/**
+ * The most text the PII scan reads from one payload. The live loop's bodies are bounded by
+ * the model's output budget (well under this); anything larger fails closed rather than
+ * stalling the synchronous gate or leaving a tail unscanned.
+ */
+const MAX_SCANNED_CHARS = 100_000;
+
+/** Every string in the payload, including inside arrays and nested objects. */
+function collectStrings(value: unknown, depth: number, out: string[]): void {
+  if (typeof value === "string") out.push(value);
+  else if (depth < MAX_PAYLOAD_DEPTH && value !== null && typeof value === "object") {
+    for (const v of Object.values(value)) collectStrings(v, depth + 1, out);
+  }
+}
+
+/**
+ * Fold the look-alikes an obfuscated leak hides behind: NFKC maps full-width digits and
+ * no-break spaces to ASCII, zero-width characters and soft hyphens are dropped, and Unicode
+ * dashes become "-" — so "１２３–４５–６７８９" scans like "123-45-6789".
+ */
+function normalizeForScan(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(/[​-‍⁠﻿­]/gu, "")
+    .replace(/[‐-―−]/gu, "-");
+}
+
 function payloadText(payload: Readonly<Record<string, unknown>>): string {
-  return Object.values(payload)
-    .filter((v): v is string => typeof v === "string")
-    .join(" \n ");
+  const parts: string[] = [];
+  collectStrings(payload, 0, parts);
+  return parts.join(" \n ");
 }
 
 /** Block outbound sends whose contents contain personal data. */
@@ -324,7 +426,15 @@ export const noPiiInExternalOutput: PolicyRule = {
   name: "no-pii-in-external-output",
   evaluate: (a) => {
     if (a.kind !== "send_email") return null;
-    const text = payloadText(a.payload);
+    const raw = payloadText(a.payload);
+    if (raw.length > MAX_SCANNED_CHARS) {
+      return {
+        rule: "no-pii-in-external-output",
+        detail: `outbound message is too large to scan for personal data (${raw.length} > ${MAX_SCANNED_CHARS} characters)`,
+        severity: "block",
+      };
+    }
+    const text = normalizeForScan(raw);
     const hit = PII_SIGNATURES.find((s) => s.found(text));
     return hit
       ? {
@@ -373,7 +483,7 @@ export const knownActionKind: PolicyRule = {
       ? null
       : {
           rule: "known-action-kind",
-          detail: `"${a.kind}" is not a kind this policy knows how to judge — unknown kinds are blocked, not trusted`,
+          detail: `"${clip(a.kind)}" is not a kind this policy knows how to judge — unknown kinds are blocked, not trusted`,
         },
 };
 
@@ -392,16 +502,30 @@ function approvalTokenOf(payload: Readonly<Record<string, unknown>>): string | u
 const approvalRecordId = (token: string): string => `${APPROVAL_SOURCE_PREFIX}${token}`;
 
 /**
+ * The retrieval score an approval record must reach to count — the same bar an outbound
+ * send needs by default. A ticket retrieved at score 0 is an irrelevant hit, not grounding.
+ */
+export const APPROVAL_MIN_SCORE = DEFAULT_SEND_THRESHOLD;
+
+/**
  * An approval is honored only when it is grounded in retrieval: the action's token must
- * match an approval record (`ticket:<token>`, with a valid score) among the sources the
- * Researcher retrieved. Provenance comes from retrieval, never from the model, so the
- * proposer cannot approve its own action — a bare `approved: true`, an empty token, or a
- * token with no matching record all route to a human. This is grounding, not a signature:
- * a production approval should also be verified against the approvals system itself.
+ * match an approval record (`ticket:<token>`) that the Researcher retrieved with a score of
+ * at least {@link APPROVAL_MIN_SCORE}. Provenance comes from retrieval, never from the
+ * model, so the proposer cannot approve its own action — a bare `approved: true`, an empty
+ * token, or a token with no matching record all route to a human.
+ *
+ * What this does NOT check, by design (it is grounding, not a signature): the record's
+ * wording (the ticket store is trusted to file only granted approvals under `ticket:`) and
+ * which target the approval covers (one ticket could be cited by two deletions). A
+ * production approval should be verified against the approvals system itself — the cosign
+ * queue. In the live loop no retrieved source carries a `ticket:` id, so every destructive
+ * action there routes to a human.
  */
 function hasRetrievedApproval(a: ProposedAction, token: string): boolean {
   const record = approvalRecordId(token);
-  return a.provenance.some((p) => p.sourceId === record && isValidScore(p.score));
+  return a.provenance.some(
+    (p) => p.sourceId === record && isValidScore(p.score) && p.score >= APPROVAL_MIN_SCORE,
+  );
 }
 
 /** Route destructive/irreversible actions to a human unless a retrieved approval backs them. */
@@ -416,7 +540,7 @@ export const destructiveNeedsApproval: PolicyRule = {
       detail:
         token === undefined
           ? `${a.kind} is irreversible and requires human approval before it runs`
-          : `${a.kind} is irreversible; approval token "${token}" matches no retrieved approval record (${approvalRecordId(token)}), so a human must approve it`,
+          : `${a.kind} is irreversible; approval token "${clip(token)}" matches no retrieved approval record (${clip(approvalRecordId(token))}), so a human must approve it`,
       severity: "review",
     };
   },
