@@ -177,6 +177,15 @@ export const requireProvenance: PolicyRule = {
  * score and a previously-blocked send flips to allow — a real change in the gate,
  * not a cosmetic one.
  */
+/**
+ * Exactly one address: one "@", and no list separators or line breaks. "a@x, b@y" would send
+ * to a second, unverified recipient, and a line break in a header value is header injection
+ * ("a@x\nBcc: b@y") once a real mailer sits behind the executor.
+ */
+function isSingleAddress(to: string): boolean {
+  return to.length > 0 && !/[,;\r\n]/u.test(to) && to.split("@").length === 2;
+}
+
 export function makeNoUnverifiedExternalSend(
   threshold: number = DEFAULT_SEND_THRESHOLD,
 ): PolicyRule {
@@ -188,7 +197,7 @@ export function makeNoUnverifiedExternalSend(
       // blank or non-string `to` (an array, a recipient under another key) used to skip
       // the threshold entirely — fail closed instead of judging a send we can't read.
       const to = typeof a.payload.to === "string" ? a.payload.to.trim() : "";
-      if (to.length === 0) {
+      if (!isSingleAddress(to)) {
         return {
           rule: "no-unverified-external-send",
           detail: "outbound send has no single recipient address (payload.to) the gate can verify",
@@ -330,8 +339,10 @@ function passesLuhn(match: string): boolean {
 }
 
 // Ordered most-specific first: the first signature that fires names the violation, so a
-// checksum-verified IBAN or a +-prefixed phone is reported as itself, not as the card or
-// SSN shape a run of its digits also happens to fit ("+353 86 1234" holds an SSN shape).
+// checksum-verified IBAN, a +-prefixed phone, or a labelled sort code / account is reported
+// as itself, not as the card or SSN shape a run of its digits also happens to fit
+// ("+353 86 1234" holds an SSN shape; "12-34-56 12345678" holds a 14-digit run). Every
+// signature blocks, so the order decides only the label, never the decision.
 const PII_SIGNATURES: readonly PiiSignature[] = [
   { label: "IBAN", found: containsIban },
   {
@@ -340,14 +351,38 @@ const PII_SIGNATURES: readonly PiiSignature[] = [
       // International with a leading +: +44 20 7946 0958 · +33 1 23 45 67 89 · +44 (0)20 …
       // No digit maximum: a greedy match that runs on into a following number still blocks.
       byPattern(/\+\d{1,3}(?:[ .-]?(?:\(0\)[ .-]?)?\d{1,4}){1,6}/gu, hasPhoneDigits),
-      // The same with a 00 international prefix (0044 20 …). A separator after the country
-      // code is required so zero-padded ids ("00123456") don't read as phones.
-      byPattern(/\b00\d{1,3}(?:[ .-](?:\(0\)[ .-]?)?\d{1,4}){2,6}/gu, hasPhoneDigits),
-      // UK mobile, national format: 07700 900123 · 07700900123
-      byPattern(/\b07\d{3}[ ]?\d{6}\b/gu),
+      // The same with a 00 international prefix (0044 20 … · 00 44 20 …). The country code
+      // cannot start with 0 and must be followed by a separator, so zero-padded ids
+      // ("00123456", "0001-2345-6789") don't read as phones.
+      byPattern(/\b00 ?[1-9]\d{0,2}(?:[ .-](?:\(0\)[ .-]?)?\d{1,4}){2,6}/gu, hasPhoneDigits),
+      // UK mobile, national format: 07700 900123 · 07700 900 123 · 07700-900123 · 07700900123
+      byPattern(/\b07\d{3}[ -]?\d{3}[ -]?\d{3}\b/gu),
+      // UK geographic, national format: 020 7946 0958 · 0161 496 0000 · 01632 960123
+      byPattern(/\b0[1-9]\d{1,3}[ -]\d{3,4}[ -]\d{4}\b/gu),
+      byPattern(/\b0[1-9]\d{3}[ -]\d{6}\b/gu),
       // North American: 555-123-4567 · 555.123.4567 · 555 123 4567 · (555) 123-4567. A
       // spaced 3-3-4 run is ambiguous ("120 450 1000 units"); the gate fails closed on it.
       byPattern(/(?:\(\d{3}\)\s?|\b\d{3}[ .-])\d{3}[ .-]\d{4}\b/gu),
+    ),
+  },
+  {
+    label: "UK sort code",
+    found: anyOf(
+      byPattern(/\bsort[\s-]*code\b[^\d]{0,12}\d{2}[- ]?\d{2}[- ]?\d{2}\b/giu), // labelled
+      // Unlabelled dd-dd-dd only directly beside an 8-digit account number (punctuation
+      // between them, no words) — "On 12-03-26 order 12345678" is a date and an order id.
+      // "12345678 (12-03-26)" is indistinguishable from a real sort code + account and
+      // blocks: a fail-closed trade-off, pinned in scripts/verify-policy.ts.
+      byPattern(/\b\d{2}-\d{2}-\d{2}[^\dA-Za-z]{1,4}\d{8}\b/gu),
+      byPattern(/\b\d{8}[^\dA-Za-z]{1,4}\d{2}-\d{2}-\d{2}\b/gu),
+    ),
+  },
+  {
+    label: "bank account number",
+    // Labelled only ("account number is …", "Account ID: …", "acct #…", "A/C …",
+    // "Account number - 1234 5678"); 6–17 digits spans UK (8) through the longest US numbers.
+    found: byPattern(
+      /\b(?:account|acct|a\/c)\b(?:\s*(?:number|num|no|id|is|#|:|\.|-)){0,4}\s*\d(?:[ -]?\d){5,16}\b/giu,
     ),
   },
   {
@@ -355,10 +390,10 @@ const PII_SIGNATURES: readonly PiiSignature[] = [
     found: anyOf(
       // 15–16 digits (Amex, Visa/Mastercard) block on shape alone, as before.
       byPattern(/\b(?:\d[ -]?){15,16}\b/gu),
-      // 13–14 and 17–19 digits (older Visa, Diners, Maestro) only when they pass Luhn, so
-      // other long ids don't trip the gate on shape.
-      byPattern(/\b(?:\d[ -]?){12,13}\d\b/gu, passesLuhn),
-      byPattern(/\b(?:\d[ -]?){16,18}\d\b/gu, passesLuhn),
+      // 13–14 and 17–19 digits (older Visa, Diners, Maestro) only written compact and passing
+      // Luhn: with separators allowed they would join neighbouring numbers into a "card"
+      // ("Ref 123454 2026-03-12").
+      byPattern(/\b(?:\d{13,14}|\d{17,19})\b/gu, passesLuhn),
     ),
   },
   {
@@ -371,75 +406,120 @@ const PII_SIGNATURES: readonly PiiSignature[] = [
       byPattern(/\b(?:ssn|social\s+security(?:\s+(?:number|no))?)\b[^\d]{0,20}\d{9}\b/giu),
     ),
   },
-  {
-    label: "UK sort code",
-    found: anyOf(
-      byPattern(/\bsort[\s-]*code\b[^\d]{0,12}\d{2}[- ]?\d{2}[- ]?\d{2}\b/giu), // labelled
-      // Unlabelled dd-dd-dd only directly beside an 8-digit account number (punctuation
-      // between them, no words) — "On 12-03-26 order 12345678" is a date and an order id.
-      byPattern(/\b\d{2}-\d{2}-\d{2}[^\dA-Za-z]{1,4}\d{8}\b/gu),
-      byPattern(/\b\d{8}[^\dA-Za-z]{1,4}\d{2}-\d{2}-\d{2}\b/gu),
-    ),
-  },
-  {
-    label: "bank account number",
-    // Labelled only ("account number is …", "Account ID: …", "acct #…", "A/C …"); 6–17
-    // digits spans UK (8) through the longest US account numbers.
-    found: byPattern(
-      /\b(?:account|acct|a\/c)\b(?:\s*(?:number|num|no|id|is|#|:|\.)){0,4}\s*\d{6,17}\b/giu,
-    ),
-  },
 ];
 
-/** Nested payload values are scanned down to this depth (arrays and objects alike). */
-const MAX_PAYLOAD_DEPTH = 4;
+/** Nested payload values are scanned down to this depth; anything deeper fails closed. */
+const MAX_PAYLOAD_DEPTH = 6;
+/** The most values (strings, numbers, keys, containers) one scan visits; more fails closed. */
+const MAX_PAYLOAD_NODES = 10_000;
 /**
  * The most text the PII scan reads from one payload. The live loop's bodies are bounded by
  * the model's output budget (well under this); anything larger fails closed rather than
  * stalling the synchronous gate or leaving a tail unscanned.
  */
 export const MAX_SCANNED_CHARS = 100_000;
+/** Joins the scanned values, so no two values can fuse into one number. */
+export const SCAN_SEPARATOR = " \n ";
 
-/** Every string in the payload, including inside arrays and nested objects. */
-function collectStrings(value: unknown, depth: number, out: string[]): void {
-  if (typeof value === "string") out.push(value);
-  else if (depth < MAX_PAYLOAD_DEPTH && value !== null && typeof value === "object") {
-    for (const v of Object.values(value)) collectStrings(v, depth + 1, out);
+/** The payload's text for scanning, or why it can't be read in full (the rule then blocks). */
+type PayloadScan =
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Every string, number and object key in the payload, at any depth up to the limit. The
+ * executor receives the whole payload (`JSON.stringify` in the loop), so the scan must see
+ * all of it: a payload it can't read in full — nested too deep (a cycle ends here too), too
+ * many values, too much text, or a getter that throws — is refused rather than half-scanned.
+ */
+function payloadText(payload: Readonly<Record<string, unknown>>): PayloadScan {
+  const parts: string[] = [];
+  let nodes = 0;
+  let chars = 0;
+  const add = (piece: string): string | undefined => {
+    chars += piece.length + (parts.length > 0 ? SCAN_SEPARATOR.length : 0);
+    parts.push(piece);
+    return chars > MAX_SCANNED_CHARS ? `too large to scan (over ${MAX_SCANNED_CHARS} characters)` : undefined;
+  };
+  const visit = (value: unknown, depth: number): string | undefined => {
+    if (++nodes > MAX_PAYLOAD_NODES) return `more than ${MAX_PAYLOAD_NODES} values`;
+    if (typeof value === "string") return add(value);
+    if (typeof value === "number" || typeof value === "bigint") return add(String(value));
+    if (value === null || typeof value !== "object") return undefined;
+    if (depth >= MAX_PAYLOAD_DEPTH) return `nested deeper than ${MAX_PAYLOAD_DEPTH} levels`;
+    const entries = Array.isArray(value)
+      ? value.map((v): readonly [string | undefined, unknown] => [undefined, v])
+      : Object.entries(value);
+    for (const [key, v] of entries) {
+      const problem = (key !== undefined ? add(key) : undefined) ?? visit(v, depth + 1);
+      if (problem !== undefined) return problem;
+    }
+    return undefined;
+  };
+  try {
+    const problem = visit(payload, 0);
+    return problem === undefined
+      ? { ok: true, text: parts.join(SCAN_SEPARATOR) }
+      : { ok: false, reason: problem };
+  } catch {
+    return { ok: false, reason: "a value could not be read" };
   }
 }
 
 /**
+ * Characters that render as nothing: every format control (zero-width space and joiners,
+ * bidi marks and embeddings, invisible operators, soft hyphen, BOM, tag characters),
+ * variation selectors, the combining grapheme joiner, and the Hangul fillers.
+ */
+const INVISIBLE = /[\p{Cf}\p{Variation_Selector}\u034F\u115F\u1160\u3164\uFFA0]/gu;
+/** Every dash punctuation mark, the minus sign and the hyphen bullet scan as "-". */
+const DASH_LIKE = /[\p{Pd}\u2212\u2043]/gu;
+/** Decimal digits outside ASCII (Arabic-Indic, Devanagari, …), which NFKC leaves alone. */
+const NON_ASCII_DIGIT = /[^\P{Nd}0-9]/gu;
+const DECIMAL_DIGIT = /^\p{Nd}$/u;
+const asciiDigitCache = new Map<string, string>();
+
+/** A decimal digit's value: Unicode lays digits out in runs of ten starting at zero. */
+function toAsciiDigit(ch: string): string {
+  const cached = asciiDigitCache.get(ch);
+  if (cached !== undefined) return cached;
+  const cp = ch.codePointAt(0) ?? 0;
+  let below = 0;
+  while (cp - below - 1 >= 0 && DECIMAL_DIGIT.test(String.fromCodePoint(cp - below - 1))) below++;
+  const digit = String(below % 10);
+  asciiDigitCache.set(ch, digit);
+  return digit;
+}
+
+/**
  * Fold the look-alikes an obfuscated leak hides behind: NFKC maps full-width digits and
- * no-break spaces to ASCII, zero-width characters and soft hyphens are dropped, and Unicode
- * dashes become "-" — so "１２３–４５–６７８９" scans like "123-45-6789".
+ * no-break spaces to ASCII, invisible characters are dropped, dashes become "-", and other
+ * scripts' digits become ASCII — so "１２３–４５–６７８９", "123\u200E-45-6789" and
+ * "१२३-४५-६७८९" all scan like "123-45-6789".
  */
 function normalizeForScan(text: string): string {
   return text
     .normalize("NFKC")
-    .replace(/[\u200B-\u200D\u2060\uFEFF\u00AD]/gu, "")
-    .replace(/[\u2010-\u2015\u2212]/gu, "-");
+    .replace(INVISIBLE, "")
+    .replace(DASH_LIKE, "-")
+    .replace(NON_ASCII_DIGIT, toAsciiDigit);
 }
 
-function payloadText(payload: Readonly<Record<string, unknown>>): string {
-  const parts: string[] = [];
-  collectStrings(payload, 0, parts);
-  return parts.join(" \n ");
-}
 
 /** Block outbound sends whose contents contain personal data. */
 export const noPiiInExternalOutput: PolicyRule = {
   name: "no-pii-in-external-output",
   evaluate: (a) => {
     if (a.kind !== "send_email") return null;
-    const raw = payloadText(a.payload);
-    if (raw.length > MAX_SCANNED_CHARS) {
+    const scan = payloadText(a.payload);
+    if (!scan.ok) {
       return {
         rule: "no-pii-in-external-output",
-        detail: `outbound message is too large to scan for personal data (${raw.length} > ${MAX_SCANNED_CHARS} characters)`,
+        detail: `outbound message can't be scanned in full for personal data: ${scan.reason}`,
         severity: "block",
       };
     }
-    const text = normalizeForScan(raw);
+    const text = normalizeForScan(scan.text);
     const hit = PII_SIGNATURES.find((s) => s.found(text));
     return hit
       ? {

@@ -21,6 +21,7 @@ import {
   DESTRUCTIVE_KINDS,
   KNOWN_ACTION_KINDS,
   MAX_SCANNED_CHARS,
+  SCAN_SEPARATOR,
   buildPolicy,
   evaluatePolicy,
   isValidScore,
@@ -125,6 +126,22 @@ const leaks: ReadonlyArray<readonly [string, string, string]> = [
   ["SSN, en-dashes", "SSN 123\u201345\u20136789.", SSN],
   ["SSN, zero-width space inside", "SSN 123-4\u200B5-6789.", SSN],
   ["SSN, no-break spaces", "SSN 123\u00A045\u00A06789.", SSN],
+  ["SSN, a left-to-right mark between groups", "SSN 123\u200E-45-6789.", SSN],
+  ["SSN, an invisible tag character inside", "SSN 123-4\u{E0041}5-6789.", SSN],
+  ["SSN, Devanagari digits", "SSN \u0967\u0968\u0969-\u096A\u096B-\u096C\u096D\u096E\u096F.", SSN],
+  ["SSN, hyphen-bullet dashes", "SSN 123\u204345\u20436789.", SSN],
+  ["card, Arabic-Indic digits", "Card \u0664\u0661\u0661\u0661 \u0661\u0661\u0661\u0661 \u0661\u0661\u0661\u0661 \u0661\u0661\u0661\u0661.", CARD],
+  ["card, a bidi mark between groups", "Card 4111\u200E 1111 1111 1111.", CARD],
+  ["card, 14-digit Diners passing Luhn", "Card 36227206271667.", CARD],
+  ["phone, UK mobile 5-3-3", "Text 07700 900 123.", PHONE],
+  ["phone, UK mobile dashed", "Text 07700-900123.", PHONE],
+  ["phone, UK London landline", "Call 020 7946 0958.", PHONE],
+  ["phone, UK 5-6 landline", "Call 01632 960123.", PHONE],
+  ["phone, 00 then a space", "Call 00 44 20 7946 0958.", PHONE],
+  ["sort code beside an account, Luhn-valid digits (not a card)", "Details: 12-34-56 12345673.", SORT_CODE],
+  ["account number, dash after the label", "Account number - 12345678.", ACCOUNT],
+  ["account number, grouped digits", "Account number 1234 5678.", ACCOUNT],
+  ["account number, 15 digits (not a card)", "Account number 123456789012345.", ACCOUNT],
 ];
 for (const [label, body, signature] of leaks) {
   expectDecision(`PII blocks: ${label}`, email(body), "block", PII, signature);
@@ -148,6 +165,11 @@ const routine: ReadonlyArray<readonly [string, string]> = [
   ["a zero-padded id", "Invoice 00123456 is attached."],
   ["a 14-digit id failing Luhn", "Shipment 12345678901234 left the depot."],
   ["random digit groups after a CC## token", "XI11 6811 173 4802 plan."],
+  ["a 6-digit ref beside an ISO date (Luhn joining)", "Ref 123454 2026-03-12."],
+  ["a zero-padded id with separators", "Ref 0001-2345-6789."],
+  // Each of these passes mod-97: only its own IBAN guard keeps it from blocking.
+  ["4-letter words after FY26 that pass mod-97 (BBAN-digit guard)", "FY26 plan team good next."],
+  ["an 8-digit token after QQ12 that passes mod-97 (group-length guard)", "QQ12 10000010 12345."],
 ];
 for (const [label, body] of routine) expectDecision(`PII allows: ${label}`, email(body), "allow");
 
@@ -159,11 +181,12 @@ expectDecision(
   PII,
   SSN,
 );
-// The size cap, pinned on both sides: a payload whose only text is the body scans exactly
-// that many characters.
+// The size cap, pinned on both sides. A `{ body }` payload scans its key, the separator and
+// the body, so the body that lands exactly on the cap is the cap minus that overhead.
+const BODY_OVERHEAD = "body".length + SCAN_SEPARATOR.length;
 const bodyOnly = (length: number): ProposedAction => ({
   ...email("hi"),
-  payload: { body: "x".repeat(length) },
+  payload: { body: "x".repeat(length - BODY_OVERHEAD) },
 });
 const piiRuleFired = (a: ProposedAction): boolean => gate(a).violations.some((v) => v.rule === PII);
 check("PII scan: a payload at the size cap is scanned, not refused", !piiRuleFired(bodyOnly(MAX_SCANNED_CHARS)));
@@ -175,10 +198,63 @@ expectDecision(
   "too large to scan",
 );
 
+const withPayload = (payload: Readonly<Record<string, unknown>>): ProposedAction => ({
+  ...email("hi"),
+  payload: { to: "ops@client.example", ...payload },
+});
+expectDecision(
+  "PII blocks: a leak five levels deep is scanned",
+  withPayload({ meta: { a: { b: { c: { d: "SSN 123-45-6789" } } } } }),
+  "block",
+  PII,
+  SSN,
+);
+expectDecision(
+  "PII blocks: a payload nested past the depth limit fails closed",
+  withPayload({ a: { b: { c: { d: { e: { f: { g: "fine" } } } } } } }),
+  "block",
+  PII,
+  "nested deeper",
+);
+expectDecision("PII blocks: a card stored as a number", withPayload({ cc: 4111111111111111 }), "block", PII, CARD);
+expectDecision("PII blocks: a card stored as an object key", withPayload({ "4111 1111 1111 1111": "x" }), "block", PII, CARD);
+expectDecision(
+  "PII blocks: a payload with too many values fails closed",
+  withPayload({ list: Array.from({ length: 20_000 }, (_, i) => i % 10) }),
+  "block",
+  PII,
+  "more than",
+);
+const cyclic: Record<string, unknown> = { note: "hi" };
+cyclic.self = cyclic;
+expectDecision("PII blocks: a cyclic payload fails closed", withPayload(cyclic), "block", PII, "nested deeper");
+// Built directly: spreading it into withPayload() would run the getter in the test itself.
+const throwing: Record<string, unknown> = { to: "ops@client.example" };
+Object.defineProperty(throwing, "body", {
+  enumerable: true,
+  get: () => {
+    throw new Error("boom");
+  },
+});
+expectDecision(
+  "PII blocks: a payload whose getter throws fails closed",
+  { ...email("hi"), payload: throwing },
+  "block",
+  PII,
+  "could not be read",
+);
+
 // --- 1c. PII: documented fail-closed trade-offs ------------------------------------------------
 // The exact spaced SSN (3-2-4) and phone (3-3-4) shapes are ambiguous; the gate blocks them
 // rather than guess. Pinned so a change to this trade-off is deliberate.
 expectDecision("trade-off: a spaced 3-2-4 run reads as an SSN", email("Room 123 45 6789."), "block", PII, SSN);
+expectDecision(
+  "trade-off: an 8-digit number beside a dd-dd-dd date reads as a sort code",
+  email("Order 12345678 (12-03-26)."),
+  "block",
+  PII,
+  SORT_CODE,
+);
 expectDecision(
   "trade-off: a spaced 3-3-4 run reads as a phone",
   email("Units shipped: 120 450 1000 this week."),
@@ -192,9 +268,14 @@ const SEND = "no-unverified-external-send";
 const sendTo = (to: unknown): ProposedAction => ({
   ...email("hi"),
   payload: to === undefined ? { subject: "s", body: "hi" } : { to, subject: "s", body: "hi" },
-  provenance: [source(0.1)],
+  // A high-scoring source: the threshold would allow, so only the recipient check blocks.
+  provenance: [source(0.9)],
 });
 expectDecision("send: a missing recipient blocks", sendTo(undefined), "block", SEND, "no single recipient");
+expectDecision("send: a comma-separated list blocks", sendTo("a@x.example, evil@y.example"), "block", SEND, "no single recipient");
+expectDecision("send: a header injection blocks", sendTo("a@x.example\nBcc: evil@y.example"), "block", SEND, "no single recipient");
+expectDecision("send: a value with no address blocks", sendTo("the vendor"), "block", SEND, "no single recipient");
+expectDecision("send: one address with a high-scoring source clears", sendTo("a@x.example"), "allow");
 expectDecision("send: a blank recipient blocks", sendTo("   "), "block", SEND, "no single recipient");
 expectDecision("send: an array of recipients blocks", sendTo(["a@x.example"]), "block", SEND, "no single recipient");
 expectDecision("send threshold: score exactly 0.70 clears", email("hi", [source(0.7)]), "allow");
