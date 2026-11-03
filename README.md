@@ -87,7 +87,7 @@ beats a **review** request beats **allow**:
 | `known-action-kind` | every action | **block** if the kind is not one the policy was written for (`send_email`, `write_record`, destructive kinds) — unknown kinds fail closed |
 | `require-provenance` | every action | **block** if no supporting source carries a valid score (a finite number in [0, 1]) |
 | `no-unverified-external-send` | outbound `send_email` | **block** unless some source with a valid score is ≥ the confidence threshold (default **0.70**, editable in the UI) |
-| `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data: US SSN, card, US/international phone, IBAN (checksum-verified), UK sort code + account, labelled account number |
+| `no-pii-in-external-output` | outbound `send_email` | **block** if the payload contains personal data: US SSN, card, US/international phone, IBAN (checksum-verified), UK sort code (labelled, or next to an 8-digit account), labelled account number |
 | `destructive-action-needs-approval` | `delete_record` / destructive kinds | **needs-approval** unless the payload's `approvalToken` matches a retrieved approval record (`ticket:<token>`) — the proposer cannot approve itself |
 | `require-model-consensus` | multi-model (triad) runs | **needs-approval** when model agreement falls below the threshold (default unanimous) |
 | `require-distinct-voices` | multi-model (triad) runs | **needs-approval** when the agreeing votes resolve to fewer than 2 distinct attested model instances — corroboration counts voices, not echoes |

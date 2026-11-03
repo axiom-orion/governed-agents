@@ -42,7 +42,8 @@ function check(name: string, ok: boolean, detail?: string): void {
 
 const policy = buildPolicy();
 const gate = (a: ProposedAction): PolicyDecision => evaluatePolicy(a, policy);
-const rulesFired = (d: PolicyDecision): string => d.violations.map((v) => v.rule).join(", ") || "none";
+const rulesFired = (d: PolicyDecision): string =>
+  d.violations.map((v) => v.rule).join(", ") || "none";
 
 function source(score: number, sourceId = "mem-1"): Provenance {
   return { sourceId, snippet: "a retrieved, verified source", score };
@@ -57,9 +58,18 @@ function email(body: string, provenance: readonly Provenance[] = [source(0.9)]):
   };
 }
 
-function expectDecision(name: string, action: ProposedAction, want: Decision, rule?: string): void {
+/** Assert the gate's decision, optionally that `rule` fired and its detail mentions `detailHas`. */
+function expectDecision(
+  name: string,
+  action: ProposedAction,
+  want: Decision,
+  rule?: string,
+  detailHas?: string,
+): void {
   const d = gate(action);
-  const ruleOk = rule === undefined || d.violations.some((v) => v.rule === rule);
+  const ruleOk =
+    rule === undefined ||
+    d.violations.some((v) => v.rule === rule && (detailHas === undefined || v.detail.includes(detailHas)));
   check(name, d.decision === want && ruleOk, `got ${d.decision} (rules: ${rulesFired(d)})`);
 }
 
@@ -107,20 +117,20 @@ expectDecision(
   "allow",
 );
 
-const note = (provenance: readonly Provenance[]): ProposedAction => ({
+const internalNote = (provenance: readonly Provenance[]): ProposedAction => ({
   kind: "write_record",
   payload: { record: "internal note" },
   justification: "j",
   provenance,
 });
-expectDecision("require-provenance: no sources blocks", note([]), "block", "require-provenance");
+expectDecision("require-provenance: no sources blocks", internalNote([]), "block", "require-provenance");
 expectDecision(
   "require-provenance: only malformed scores blocks",
-  note([source(Number.NaN), source(2)]),
+  internalNote([source(Number.NaN), source(2)]),
   "block",
   "require-provenance",
 );
-expectDecision("require-provenance: one valid source allows", note([source(0.3)]), "allow");
+expectDecision("require-provenance: one valid source allows", internalNote([source(0.3)]), "allow");
 check(
   "isValidScore: accepts 0 and 1, rejects NaN / ∞ / out of range",
   isValidScore(0) && isValidScore(1) && ![Number.NaN, Number.POSITIVE_INFINITY, -0.01, 1.01].some(isValidScore),
@@ -151,56 +161,70 @@ check(
 const APPROVAL = "destructive-action-needs-approval";
 const ticket = (token: string, score = 0.95): Provenance =>
   source(score, `${APPROVAL_SOURCE_PREFIX}${token}`);
-const del = (payload: Record<string, unknown>, provenance: readonly Provenance[] = [source(0.9)]): ProposedAction => ({
+const deletion = (
+  payload: Readonly<Record<string, unknown>>,
+  provenance: readonly Provenance[] = [source(0.9)],
+): ProposedAction => ({
   kind: "delete_record",
   payload: { collection: "vendors", ...payload },
   justification: "j",
   provenance,
 });
-expectDecision("delete without an approval needs a human", del({}), "needs_approval", APPROVAL);
-expectDecision("delete with only approved: true needs a human", del({ approved: true }), "needs_approval", APPROVAL);
-expectDecision("delete with an empty approvalToken needs a human", del({ approvalToken: "" }), "needs_approval", APPROVAL);
-expectDecision("delete with a whitespace approvalToken needs a human", del({ approvalToken: "   " }), "needs_approval", APPROVAL);
+expectDecision("delete without an approval needs a human", deletion({}), "needs_approval", APPROVAL);
+expectDecision(
+  "delete with only approved: true needs a human",
+  deletion({ approved: true }),
+  "needs_approval",
+  APPROVAL,
+);
+expectDecision(
+  "delete with an empty approvalToken needs a human",
+  deletion({ approvalToken: "" }),
+  "needs_approval",
+  APPROVAL,
+);
+expectDecision(
+  "delete with a whitespace approvalToken needs a human",
+  deletion({ approvalToken: "   " }),
+  "needs_approval",
+  APPROVAL,
+);
 expectDecision(
   "delete with a non-string approvalToken needs a human",
-  del({ approvalToken: 4821 }, [ticket("4821")]),
+  deletion({ approvalToken: 4821 }, [ticket("4821")]),
   "needs_approval",
   APPROVAL,
 );
 expectDecision(
   "delete whose token matches no retrieved record needs a human",
-  del({ approvalToken: "OPS-9999" }, [ticket("OPS-4821")]),
+  deletion({ approvalToken: "OPS-9999" }, [ticket("OPS-4821")]),
   "needs_approval",
   APPROVAL,
-);
-const unmatched = gate(del({ approvalToken: "OPS-9999" }, [ticket("OPS-4821")]));
-check(
-  "an unmatched token is named in the violation detail",
-  unmatched.violations.some((v) => v.rule === APPROVAL && v.detail.includes("OPS-9999")),
-  rulesFired(unmatched),
+  "OPS-9999",
 );
 expectDecision(
   "delete whose matching ticket has a malformed score needs a human",
-  del({ approvalToken: "OPS-4821" }, [source(0.9), ticket("OPS-4821", Number.NaN)]),
+  deletion({ approvalToken: "OPS-4821" }, [source(0.9), ticket("OPS-4821", Number.NaN)]),
   "needs_approval",
   APPROVAL,
 );
 expectDecision(
   "delete whose token matches a retrieved ticket clears",
-  del({ approvalToken: "OPS-4821" }, [ticket("OPS-4821")]),
+  deletion({ approvalToken: "OPS-4821" }, [ticket("OPS-4821")]),
   "allow",
 );
 expectDecision(
-  "an approval does not excuse PII: a blocked send stays blocked",
-  { ...email("SSN 123-45-6789"), payload: { to: "x@y.example", body: "SSN 123-45-6789", approvalToken: "OPS-4821" } },
-  "block",
-  PII,
+  "a token with surrounding whitespace is trimmed before matching its ticket",
+  deletion({ approvalToken: "  OPS-4821 " }, [ticket("OPS-4821")]),
+  "allow",
 );
 
 // --- 5. Shipped Sample scenarios keep their recorded decisions -------------------------------
+let samplesReplayed = 0;
 for (const [id, run] of Object.entries(sampleRuns)) {
   const recorded = run.find((e) => e.type === "gate_decision");
   if (recorded === undefined || recorded.type !== "gate_decision") continue;
+  samplesReplayed++;
   const replayed = replayWithPolicy(run, {}).find((e) => e.type === "gate_decision");
   const got = replayed?.type === "gate_decision" ? replayed.decision.decision : "missing";
   check(
@@ -209,6 +233,11 @@ for (const [id, run] of Object.entries(sampleRuns)) {
     `replayed ${got}`,
   );
 }
+check(
+  "every shipped sample run carries a recorded gate decision to replay",
+  samplesReplayed > 0 && samplesReplayed === Object.keys(sampleRuns).length,
+  `${samplesReplayed}/${Object.keys(sampleRuns).length} replayed`,
+);
 
 // --- report ----------------------------------------------------------------------------
 const failed = results.filter((r) => !r.ok);

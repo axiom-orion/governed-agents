@@ -193,46 +193,70 @@ export function makeNoUnverifiedExternalSend(
 /** The outbound-send rule at the default threshold (kept for the frozen contract). */
 export const noUnverifiedExternalSend: PolicyRule = makeNoUnverifiedExternalSend();
 
-// PII signatures. Still a pattern list, not a vetted detector (production should put a
-// DLP / PII service behind this rule), but it covers the formats a financial-services
+// PII detection. Still patterns and checksums, not a vetted detector (production should
+// put a DLP / PII service behind this rule), but it covers the formats a financial-services
 // email actually leaks: US and UK identifiers, international phones, and bank details.
 // Ambiguous shapes are context-gated so routine numbers don't trip the gate: a bare
 // 9-digit run is an SSN only when labelled, and a dd-dd-dd run is a sort code only when
 // labelled or sitting next to an 8-digit account number (otherwise it is likely a date).
 
-/** One detector; `found` is pure. Every regex below carries the `g` flag for `matchAll`. */
+/** A pure test of one payload's text for one kind of personal data. */
+type Detector = (text: string) => boolean;
+
 interface PiiSignature {
   readonly label: string;
-  readonly found: (text: string) => boolean;
+  readonly found: Detector;
 }
 
-/** A regex detector, optionally confirmed per match (e.g. a digit-count or checksum test). */
-function byPattern(re: RegExp, valid?: (match: string) => boolean): (text: string) => boolean {
+/** True when any of the detectors fires. */
+const anyOf =
+  (...detectors: readonly Detector[]): Detector =>
+  (text) =>
+    detectors.some((d) => d(text));
+
+/**
+ * A regex detector, optionally confirmed per match (a digit-count or checksum test).
+ * `matchAll` needs a global regex, so a pattern without `g` fails at module load (and in
+ * `npm test`) rather than throwing on the first email that reaches the gate.
+ */
+function byPattern(re: RegExp, isGenuine?: (match: string) => boolean): Detector {
+  if (!re.global) throw new Error(`PII pattern ${re} must carry the g flag`);
   return (text) => {
     for (const m of text.matchAll(re)) {
-      if (valid === undefined || valid(m[0])) return true;
+      if (isGenuine === undefined || isGenuine(m[0])) return true;
     }
     return false;
   };
 }
 
+/** ISO 13616: an IBAN is 15–34 characters — country (2) + check digits (2) + BBAN (11–30). */
+const IBAN_MIN_LENGTH = 15;
+const IBAN_MAX_LENGTH = 34;
+/** A grouped IBAN (`GB82 WEST 1234 …`) spans at most ⌈34 / 4⌉ = 9 whitespace-separated tokens. */
+const IBAN_MAX_TOKENS = Math.ceil(IBAN_MAX_LENGTH / 4);
+/** E.164: a full international number carries at most 15 digits; 8 rules out short codes. */
+const PHONE_MIN_DIGITS = 8;
+const PHONE_MAX_DIGITS = 15;
+
 const digitCount = (s: string): number => s.replace(/\D/gu, "").length;
 
-/** ISO 13616 mod-97 check: the number formed by BBAN + country + check digits ≡ 1 (mod 97). */
+/** ISO 7064 mod-97-10: BBAN + country + check digits, letters as A = 10 … Z = 35, ≡ 1 (mod 97). */
 function isValidIban(compact: string): boolean {
   const iban = compact.toUpperCase();
-  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/u.test(iban)) return false;
+  if (iban.length < IBAN_MIN_LENGTH || iban.length > IBAN_MAX_LENGTH) return false;
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]+$/u.test(iban)) return false;
   const rearranged = iban.slice(4) + iban.slice(0, 4);
+  const LETTER_OFFSET = "A".charCodeAt(0) - 10; // so that A → 10
   let remainder = 0;
   for (const ch of rearranged) {
-    // Letters expand to two digits (A = 10 … Z = 35); fold digit by digit to stay in range.
-    const expanded = /[A-Z]/u.test(ch) ? String(ch.charCodeAt(0) - 55) : ch;
+    const expanded = /[A-Z]/u.test(ch) ? String(ch.charCodeAt(0) - LETTER_OFFSET) : ch;
+    // Fold digit by digit so the running value never exceeds safe-integer range.
     for (const digit of expanded) remainder = (remainder * 10 + Number(digit)) % 97;
   }
   return remainder === 1;
 }
 
-/** IBANs appear compact or in groups of four; join up to 9 adjacent tokens and checksum each prefix. */
+/** IBANs appear compact or in groups of four: join adjacent tokens and checksum each prefix. */
 function containsIban(text: string): boolean {
   const tokens = text
     .split(/\s+/u)
@@ -241,10 +265,10 @@ function containsIban(text: string): boolean {
   for (let i = 0; i < tokens.length; i++) {
     if (!/^[A-Za-z]{2}\d{2}/u.test(tokens[i] ?? "")) continue;
     let candidate = "";
-    for (let j = i; j < tokens.length && j < i + 9; j++) {
+    for (let j = i; j < tokens.length && j < i + IBAN_MAX_TOKENS; j++) {
       candidate += tokens[j] ?? "";
-      if (candidate.length > 34) break;
-      if (candidate.length >= 15 && isValidIban(candidate)) return true;
+      if (candidate.length > IBAN_MAX_LENGTH) break;
+      if (isValidIban(candidate)) return true;
     }
   }
   return false;
@@ -253,33 +277,39 @@ function containsIban(text: string): boolean {
 const PII_SIGNATURES: readonly PiiSignature[] = [
   {
     label: "US Social Security number",
-    found: (text) =>
-      byPattern(/\b\d{3}[- ]\d{2}[- ]\d{4}\b/gu)(text) ||
-      byPattern(/\b(?:ssn|social\s+security(?:\s+(?:number|no))?)\b[^\d]{0,20}\d{9}\b/giu)(text),
+    found: anyOf(
+      byPattern(/\b\d{3}[- ]\d{2}[- ]\d{4}\b/gu), // 123-45-6789 · 123 45 6789
+      // A bare 9-digit run only when labelled — otherwise it is as likely an order id.
+      byPattern(/\b(?:ssn|social\s+security(?:\s+(?:number|no))?)\b[^\d]{0,20}\d{9}\b/giu),
+    ),
   },
   { label: "credit-card number", found: byPattern(/\b(?:\d[ -]?){15,16}\b/gu) },
   { label: "IBAN", found: containsIban },
   {
-    label: "UK sort code and account number",
-    found: (text) =>
-      byPattern(/\bsort[\s-]*code\b[^\d]{0,12}\d{2}[- ]?\d{2}[- ]?\d{2}\b/giu)(text) ||
-      byPattern(/\b\d{2}-\d{2}-\d{2}\b[^\d]{0,24}\b\d{8}\b/gu)(text) ||
-      byPattern(/\b\d{8}\b[^\d]{0,24}\b\d{2}-\d{2}-\d{2}\b/gu)(text),
+    label: "UK sort code",
+    found: anyOf(
+      byPattern(/\bsort[\s-]*code\b[^\d]{0,12}\d{2}[- ]?\d{2}[- ]?\d{2}\b/giu), // labelled
+      // Unlabelled dd-dd-dd only beside an 8-digit account number, either order.
+      byPattern(/\b\d{2}-\d{2}-\d{2}\b[^\d]{0,24}\b\d{8}\b/gu),
+      byPattern(/\b\d{8}\b[^\d]{0,24}\b\d{2}-\d{2}-\d{2}\b/gu),
+    ),
   },
   {
     label: "bank account number",
+    // Labelled only; 6–17 digits spans UK (8) through the longest US account numbers.
     found: byPattern(/\b(?:account|acct)\.?(?:\s*(?:no\.?|number|num|#))?[\s:#]*\d{6,17}\b/giu),
   },
   {
     label: "phone number",
-    found: (text) =>
+    found: anyOf(
       // North American: 555-123-4567 · 555.123.4567 · 555 123 4567 · (555) 123-4567
-      byPattern(/(?:\(\d{3}\)\s?|\b\d{3}[ .-])\d{3}[ .-]\d{4}\b/gu)(text) ||
-      // International with a leading +: +44 20 7946 0958 (8–15 digits, E.164's limit)
+      byPattern(/(?:\(\d{3}\)\s?|\b\d{3}[ .-])\d{3}[ .-]\d{4}\b/gu),
+      // International with a leading +: +44 20 7946 0958
       byPattern(/\+\d{1,3}(?:[ .-]?\d{2,4}){2,4}\b/gu, (m) => {
         const n = digitCount(m);
-        return n >= 8 && n <= 15;
-      })(text),
+        return n >= PHONE_MIN_DIGITS && n <= PHONE_MAX_DIGITS;
+      }),
+    ),
   },
 ];
 
@@ -350,10 +380,16 @@ export const knownActionKind: PolicyRule = {
 /** Provenance `sourceId` prefix under which a retrieved approval record is filed. */
 export const APPROVAL_SOURCE_PREFIX = "ticket:";
 
+/** The payload's approval token, trimmed; undefined when absent, not a string, or blank. */
 function approvalTokenOf(payload: Readonly<Record<string, unknown>>): string | undefined {
   const token = payload.approvalToken;
-  return typeof token === "string" && token.trim().length > 0 ? token : undefined;
+  if (typeof token !== "string") return undefined;
+  const trimmed = token.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
+
+/** The provenance `sourceId` an approval token's record is retrieved under. */
+const approvalRecordId = (token: string): string => `${APPROVAL_SOURCE_PREFIX}${token}`;
 
 /**
  * An approval is honored only when it is grounded in retrieval: the action's token must
@@ -363,10 +399,8 @@ function approvalTokenOf(payload: Readonly<Record<string, unknown>>): string | u
  * token with no matching record all route to a human. This is grounding, not a signature:
  * a production approval should also be verified against the approvals system itself.
  */
-function hasRetrievedApproval(a: ProposedAction): boolean {
-  const token = approvalTokenOf(a.payload);
-  if (token === undefined) return false;
-  const record = `${APPROVAL_SOURCE_PREFIX}${token}`;
+function hasRetrievedApproval(a: ProposedAction, token: string): boolean {
+  const record = approvalRecordId(token);
   return a.provenance.some((p) => p.sourceId === record && isValidScore(p.score));
 }
 
@@ -374,14 +408,15 @@ function hasRetrievedApproval(a: ProposedAction): boolean {
 export const destructiveNeedsApproval: PolicyRule = {
   name: "destructive-action-needs-approval",
   evaluate: (a) => {
-    if (!DESTRUCTIVE_KINDS.has(a.kind) || hasRetrievedApproval(a)) return null;
+    if (!DESTRUCTIVE_KINDS.has(a.kind)) return null;
     const token = approvalTokenOf(a.payload);
+    if (token !== undefined && hasRetrievedApproval(a, token)) return null;
     return {
       rule: "destructive-action-needs-approval",
       detail:
         token === undefined
           ? `${a.kind} is irreversible and requires human approval before it runs`
-          : `${a.kind} is irreversible; approval token "${token}" matches no retrieved approval record (${APPROVAL_SOURCE_PREFIX}${token}), so a human must approve it`,
+          : `${a.kind} is irreversible; approval token "${token}" matches no retrieved approval record (${approvalRecordId(token)}), so a human must approve it`,
       severity: "review",
     };
   },

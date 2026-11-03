@@ -15,6 +15,7 @@
     "check:model": "tsx scripts/check-model.ts",
     "check:providers": "tsx scripts/check-providers.ts",
     "verify:governance": "tsx scripts/verify-governance.ts",
+    "verify:policy": "tsx scripts/verify-policy.ts",
     "verify:cosign": "NODE_OPTIONS=--conditions=react-server tsx scripts/verify-cosign.ts",
     "demo": "tsx scripts/run.ts",
     "demo:allow": "tsx scripts/run.ts allowed",
