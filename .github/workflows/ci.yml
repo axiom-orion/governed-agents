@@ -44,6 +44,9 @@ jobs:
         env:
           AGENTS_OFFLINE: "1"
 
+      - name: Gate evaluation — labelled set must match the published results
+        run: npm run eval:gate
+
       - name: Cosign intervention surface (round-trip · audit chain · fail-closed · drift)
         run: npm run verify:cosign
         env:

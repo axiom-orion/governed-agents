@@ -52,8 +52,8 @@ The graph is the vehicle; **governance is the point.**
 
 ## What's verified
 
-`npm test` runs five offline suites with no API key and no network. CI runs the same
-five suites on every pull request:
+`npm test` runs six offline suites with no API key and no network. CI runs the same
+six on every pull request:
 
 | Suite | Checks | What it pins |
 |---|---|---|
@@ -61,10 +61,43 @@ five suites on every pull request:
 | Attested independence + Red Cell | 42 | consensus, distinct-voice counting, and the adversarial reviewer's independence |
 | Policy edge cases | 131 | PII detection, score validation, unknown action kinds, approval tokens |
 | Cosign intervention surface | 42 | approve/reject round trip, the audit chain, fail-closed expiry, drift events |
+| Gate evaluation | 85 cases | the labelled results below still match what the gate does |
 | Loop smoke test | 2 runs | an allowed task executes; a blocked task halts |
 
 The gate is a pure function, so these are deterministic. Live-model behaviour (real
 Claude, Gemini and Grok calls) is not covered by CI.
+
+## How good is the gate? (measured)
+
+The suites above pin behaviour the gate is known to have. The evaluation asks a harder
+question: on actions labelled by what the policy is *meant* to do, how often is it right?
+[`evals/gate-cases.ts`](evals/gate-cases.ts) holds 85 labelled actions, including
+personal data written in non-standard ways and numbers that only look like personal data.
+
+| measure | result |
+|---|---|
+| exact decision correct | 66 / 85 (0.776) |
+| unsafe allows (should have been stopped, was allowed) | 17 / 62 (0.274) |
+| false stops (should have been allowed, was stopped) | 2 / 23 (0.087) |
+| `block` precision / recall | 0.950 / 0.704 |
+| `needs_approval` precision / recall | 1.000 / 0.875 |
+
+What that says:
+
+- **The structural rules hold.** Provenance, unknown kinds, irreversible actions and
+  standard-format personal data score 28 / 28.
+- **Pattern-based PII detection is evadable.** Only 8 of 20 rewrites are caught: an SSN
+  with dots or slashes, a card number broken across lines, and digits spelled out all get
+  through. This is the measured version of the caveat in the code that production should
+  put a real DLP service behind the rule.
+- **Two gaps are not about PII.** Extra recipients in `cc` / `bcc` are not checked, and the
+  gate trusts the declared action kind, so a `write_record` whose payload asks for a
+  delete is allowed.
+
+Every miss is listed by name in [`evals/gate-results.md`](evals/gate-results.md). The
+labels are one author's judgement, not an external benchmark. CI fails if the gate's
+behaviour drifts from the published results in either direction, so these numbers cannot
+go stale silently: `npm run eval:gate` checks, `npm run eval:gate -- --write` regenerates.
 
 ## How it works
 
@@ -230,13 +263,16 @@ on Cloudflare Workers via the OpenNext adapter.
   held action and the decision routes back to the enforcement plane (fail-closed on timeout).
 - **Durable audit log** — built as the hash-linked **Truth Chain** (append-only, server-only
   writes, tamper-evident); persisted to Postgres on the live path (`supabase/`).
+- **An eval harness** — built: [`evals/`](evals), a labelled set scored in CI with
+  precision and recall per decision (see "How good is the gate?").
 
 ## What I'd build next
 
+- **Close the measured gaps** — check `cc` / `bcc` recipients, widen the separator
+  handling in the SSN and card patterns, and decide how far the gate should inspect a
+  payload that contradicts its declared kind.
 - **Policy as data** — load rules/thresholds from a versioned config or small DSL,
   with per-rule provenance requirements, instead of code.
-- **An eval harness** — a labeled set of (task → expected decision) cases run in CI to
-  catch policy regressions, with precision/recall on block decisions.
 - **More gate types** — rate limits, spend caps, recipient allowlists, and
   data-residency rules, composed into named policy bundles.
 
@@ -254,6 +290,7 @@ lib/trace-model.ts     pure projection TraceEvent[] → nodes/edges/status
 components/            React Flow canvas + hero + guided walkthrough + audit panels
 mocks/trace.sample.ts  recorded runs for the instant Sample mode
 scripts/verify-trace.ts headless contract test (CI)
+evals/                 labelled gate evaluation: cases, published results, CI baseline
 docs/ARCHITECTURE.md   data flow + full event schema
 docs/CONSENSUS.md      the model triad, attested voices and the Red Cell
 docs/STATUS.md         decision log and operational notes (partly historical)
