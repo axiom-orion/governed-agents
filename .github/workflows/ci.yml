@@ -1,9 +1,9 @@
 name: CI
 
-# Quality gates for pull requests and the default branch. Deployment is handled by
-# Vercel's native Git integration (connect the repo in the Vercel dashboard) — this
-# workflow only gates correctness, it does not deploy. Protect the default branch with
-# a required status check on this workflow so production deploys are effectively gated.
+# Quality gates for pull requests and the default branch. This workflow only gates
+# correctness; it does not deploy. Deployment is to Cloudflare Workers (see the README's
+# Deploy section). Protect the default branch with a required status check on this
+# workflow so deploys are effectively gated.
 
 on:
   push:

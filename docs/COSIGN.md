@@ -43,7 +43,7 @@ mechanisms enforce it:
 
 - **Read-time:** a hold past its TTL reads as `TIMEOUT` immediately (no merge is ever
   released on a stale hold), independent of any cron.
-- **Durable backstop:** the TTL sweeper (`/api/governance/sweep`, a Vercel Cron) flips
+- **Durable backstop:** the TTL sweeper (`/api/governance/sweep`, called by a Cloudflare Cron Trigger) flips
   expired `PENDING` → `TIMEOUT`, pushes the reject through the adapter, and audits it.
 
 Default TTL is **15 minutes**; tighten per action type (the simulator's secondary hold uses
@@ -137,7 +137,7 @@ console footer and here, not papered over.
 ## Run the live path
 
 ```bash
-# server-side only (set in Vercel → Environment Variables, or .env.local for local runs)
+# server-side only (set as Cloudflare Worker secrets/vars, or .env.local for local runs)
 GOVERNANCE_SOURCE=cognigate
 SUPABASE_URL=https://<project-ref>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<service-role key, from the Supabase dashboard>

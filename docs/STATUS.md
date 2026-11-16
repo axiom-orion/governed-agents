@@ -3,10 +3,13 @@
 A durable snapshot of where the model-governance layer stands and why — so the
 context survives chat archiving. Last updated end of the consensus/Red-Cell arc.
 
-## What's live
+> **Read this as a decision log, not a live status page.** Hosting moved from Vercel to
+> Cloudflare Workers on 2026-10-20 (see the README's Deploy section) and there is no
+> hosted demo at the moment. Every Vercel reference below, including the
+> `governed-agents.vercel.app` URL, the deploy-lag caveat and the "Open / pending"
+> production checks, describes the earlier deployment and is kept for the reasoning.
 
-> **2026-10-20:** hosting moved from Vercel to Cloudflare Workers (see the README's
-> Deploy section). Vercel references below are historical.
+## What was live (Vercel era)
 
 `governed-agents.vercel.app` — Researcher → Reasoner → governance gate → execute / halt /
 needs-approval, rendered from a streamed NDJSON trace.
