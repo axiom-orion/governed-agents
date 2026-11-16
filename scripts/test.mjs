@@ -17,6 +17,7 @@ const SUITES = [
     // `server-only` modules resolve only under the react-server condition.
     nodeOptions: "--conditions=react-server",
   },
+  { name: "Gate evaluation (labelled set; fails on drift from evals/gate-results.md)", script: "scripts/eval-gate.ts" },
   { name: "Loop smoke test (allowed → allow, blocked → block)", script: "scripts/run.ts" },
 ];
 

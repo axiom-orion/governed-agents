@@ -1,5 +1,7 @@
 # Governed Agents
 
+[![CI](https://github.com/axiom-orion/governed-agents/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/axiom-orion/governed-agents/actions/workflows/ci.yml)
+
 **Agents that know what they're _not_ allowed to do.**
 
 Give an AI agent real tools and it will take real, irreversible actions — send the
@@ -18,12 +20,10 @@ npm ci && npm run dev   # then open http://localhost:3000
 Click **“Watch it block a risky action,”** then edit a policy threshold and re-run to
 watch the same action flip from **blocked** to **allowed**. Without an
 `ANTHROPIC_API_KEY`, a deterministic offline stub stands in for the models; with one,
-the agents call a current Claude model server-side. (The hosted demo is temporarily
-offline.)
+the agents call a current Claude model server-side. There is no hosted demo at the
+moment; the local run above is the full app.
 
 ![Architecture: Researcher → Reasoner → Governance gate → allow / block / needs-approval, streamed as NDJSON to the UI](docs/architecture.svg)
-
-<!-- 90-second walkthrough: record a short Loom/YouTube clip (watch-it-block → edit policy → flip → raw trace) and add the link here. -->
 
 ---
 
@@ -49,6 +49,55 @@ The graph is the vehicle; **governance is the point.**
 | **Edit the threshold → Re-run** | Lower `no-unverified-external-send` below 0.55 and the **same** action flips **BLOCK → ALLOW**. The flip is real: Sample recomputes the gate, Live re-runs the backend with your override. |
 | **View raw trace** | The actual streamed `TraceEvent`s, in order, pretty-printed — proof it's a real NDJSON stream, not a canned animation. |
 | **Scenario picker** | A spread of governance behaviors: confidence threshold, **PII leak**, and an **irreversible delete** that needs **human approval** (a third decision state). |
+
+## What's verified
+
+`npm test` runs six offline suites with no API key and no network. CI runs the same
+six on every pull request:
+
+| Suite | Checks | What it pins |
+|---|---|---|
+| Trace projection contract | 70 | the event stream → graph projection, the parser's handling of malformed lines, and the policy flip |
+| Attested independence + Red Cell | 42 | consensus, distinct-voice counting, and the adversarial reviewer's independence |
+| Policy edge cases | 131 | PII detection, score validation, unknown action kinds, approval tokens |
+| Cosign intervention surface | 42 | approve/reject round trip, the audit chain, fail-closed expiry, drift events |
+| Gate evaluation | 85 cases | the labelled results below still match what the gate does |
+| Loop smoke test | 2 runs | an allowed task executes; a blocked task halts |
+
+The gate is a pure function, so these are deterministic. Live-model behaviour (real
+Claude, Gemini and Grok calls) is not covered by CI.
+
+## How good is the gate? (measured)
+
+The suites above pin behaviour the gate is known to have. The evaluation asks a harder
+question: on actions labelled by what the policy is *meant* to do, how often is it right?
+[`evals/gate-cases.ts`](evals/gate-cases.ts) holds 85 labelled actions, including
+personal data written in non-standard ways and numbers that only look like personal data.
+
+| measure | result |
+|---|---|
+| exact decision correct | 66 / 85 (0.776) |
+| unsafe allows (should have been stopped, was allowed) | 17 / 62 (0.274) |
+| false stops (should have been allowed, was stopped) | 2 / 23 (0.087) |
+| `block` precision / recall | 0.950 / 0.704 |
+| `needs_approval` precision / recall | 1.000 / 0.875 |
+
+What that says:
+
+- **The structural rules hold.** Provenance, unknown kinds, irreversible actions and
+  standard-format personal data score 28 / 28.
+- **Pattern-based PII detection is evadable.** Only 8 of 20 rewrites are caught: an SSN
+  with dots or slashes, a card number broken across lines, and digits spelled out all get
+  through. This is the measured version of the caveat in the code that production should
+  put a real DLP service behind the rule.
+- **Two gaps are not about PII.** Extra recipients in `cc` / `bcc` are not checked, and the
+  gate trusts the declared action kind, so a `write_record` whose payload asks for a
+  delete is allowed.
+
+Every miss is listed by name in [`evals/gate-results.md`](evals/gate-results.md). The
+labels are one author's judgement, not an external benchmark. CI fails if the gate's
+behaviour drifts from the published results in either direction, so these numbers cannot
+go stale silently: `npm run eval:gate` checks, `npm run eval:gate -- --write` regenerates.
 
 ## How it works
 
@@ -99,76 +148,42 @@ request body, and the **Sample** replay **recomputes** the gate
 ([`lib/policy-replay.ts`](lib/policy-replay.ts)) rather than replaying a baked-in
 decision — so the flip is real on both paths.
 
-### Model consensus (the triad)
+### Model consensus and adversarial review
 
-The Reasoner step can be decided by a **triad** — Claude + Gemini + Grok — voting on
-the action ([`lib/consensus.ts`](lib/consensus.ts), [`lib/providers.ts`](lib/providers.ts)).
-Each model proposes independently; if they don't agree, `require-model-consensus`
-holds the run for a human instead of acting on a split decision. A provider with no
-key simply **abstains**, so it degrades gracefully to a single model. Set
-`GEMINI_API_KEY` + `XAI_API_KEY` to light up Live; the *“model triad agrees / splits”*
-Sample scenarios demo it with zero keys.
+Two optional layers sit on top of the hard rules, and both run in the Sample scenarios
+with zero keys:
 
-### Attested independence + the Red Cell (oversight that can prove it's not theater)
+- **Consensus.** Claude, Gemini and Grok can each propose the action. A split, or a
+  "unanimous" vote that resolves to one model instance echoed, goes to a human.
+- **Red Cell.** An adversarial reviewer argues against consequential actions. Its verdict
+  only counts if it runs on a model instance provably distinct from the proposer.
 
-Every vote now carries an attested **voice identity** — the configured
-`(provider, model id)` pair — and the consensus records how many **distinct
-instances** actually backed the chosen action. A unanimous "consensus" whose agreeing
-votes resolve to one instance is one voice echoed N times; `require-distinct-voices`
-routes it to a human instead of honoring it. After the action is chosen, the **Red
-Cell** ([`lib/redcell.ts`](lib/redcell.ts)) — an adversarial *mode*, not a fourth
-agent — runs on an instance provably distinct from the generator and makes the
-strongest case against the action; the gate refuses to honor its verdict if the
-voices collapse, and parks any objection for a human. Honest scope: for API-backed
-voices this attests what we *configured and called* — it cannot see through a
-provider's internal routing, and that residual trust is named, not papered over.
-Verified headlessly with zero keys: `npx tsx scripts/verify-governance.ts` (or `npm test` for every offline suite).
+How voices are attested, the fallback chain, and the limits of that attestation:
+[`docs/CONSENSUS.md`](docs/CONSENSUS.md).
 
-Both are **glass-boxed in the trace UI**: the consensus panel shows each vote's attested
-`provider/model` and flags an *echo* (agreeing votes that resolve to one instance); a Red
-Cell panel shows the reviewer's verdict, its attested identity, and whether it's independent
-of the proposer. Two Sample scenarios demo them with zero keys — *"unanimous, but one voice
-echoed"* and *"the Red Cell objects"* — and the projections are pinned in `verify-trace`
-(70 checks).
+## The intervention console
 
-Verify your keys + model ids from the terminal before deploying:
+The gate and the Red Cell are automated control. The **intervention console**
+(`/console` when running locally) is the human half: the page where an operator watches
+a fleet of agents and steps in.
 
-```bash
-npm run check:providers   # pings each configured provider, prints ✓/✗ per model
-```
+- **Cosign queue.** A held action appears with its full context. The operator approves or
+  rejects, and the decision is written to an append-only, hash-linked audit chain. The
+  scripted example is a genealogy matcher that wants to merge two people who share a name;
+  the evidence shows they are different family lines, and a human refuses the merge.
+- **Fleet view.** Read-only status for ten agents.
+- **Drift → quarantine.** Two model swaps are detected and the agents quarantined. A
+  self-hosted model is caught by comparing its weights; an API-backed model, whose weights
+  can't be read, is caught by behavioural probes. The types make it impossible to claim
+  weight-based detection for an API model.
 
-## The intervention console — where a human stops a bad merge
+It fails closed: if no human answers before the deadline (15 minutes by default), the
+action is rejected and the timeout is audited.
 
-The gate and the Red Cell are *automated* control. The **intervention console**
-([`/console`](http://localhost:3000/console)) is the **runtime human-in-the-loop** half —
-the place an operator sits, watches a fleet, and intervenes. Three surfaces on one page,
-pointed at the [flcason.com](https://flcason.com) genealogy reference impl:
-
-- **Cosign queue** — the first *write path* in the stack. A `REQUIRE_COSIGN`-held action
-  surfaces with full context; the operator approves or rejects; the decision routes back
-  through the enforcement plane and lands in an append-only, hash-linked **Truth Chain**.
-  The centerpiece is the **Cason↔Causey merge refusal**: two “Elias” records the matcher
-  wants to merge, and the **Maryland-detour fingerprint** that proves they’re distinct
-  lineages — a human visibly stopping a bad merge.
-- **Fleet view** — read-only: ten agents, CAR ID, BASIS tier, status, attestation method.
-- **Drift → quarantine** — two model swaps caught, each by the *right* method: **Scribe**
-  (self-hosted open weights) by weight-space **I(θ)**, and an **API-backed agent** by
-  **canary-probe** behavioral attestation. Both agents auto-quarantine.
-
-Two design commitments make it credible:
-
-- **Fail-closed.** No human ack before the TTL expires ⇒ **auto-reject** + audit. Silence is
-  refusal, not release. (Default 15m; tighter per action type.)
-- **Honest drift.** Weight-space I(θ) needs the weights, so it applies *only* to Scribe (the
-  one self-hosted open-weight agent); the nine API-backed agents are attested by
-  **canary-probe** behavioral checks, never by I(θ). The `DriftEvent` type makes the wrong
-  claim impossible to express.
-
-Simulator-first and adapter-swappable: it runs today with **zero infrastructure** and is
-safe for public exposure (synthetic, no bridge to a real agent). Flipping to the live
-CogniGate/ASTS + Supabase path is one env var (`GOVERNANCE_SOURCE`). Full write-path boundary,
-data model, and limitations: [`docs/COSIGN.md`](docs/COSIGN.md). Verified headlessly
-(42 checks, zero infra): `npm run verify:cosign`.
+The console runs on a built-in simulator with synthetic data and no infrastructure. A
+live adapter (Supabase plus an external enforcement service) exists but is inert until
+that service is connected. Write-path boundary, data model and limitations:
+[`docs/COSIGN.md`](docs/COSIGN.md).
 
 ## Quickstart
 
@@ -178,6 +193,7 @@ cp .env.example .env.local   # optional — ANTHROPIC_API_KEY for live models; o
 npm run dev                  # http://localhost:3000
 
 # headless / CI
+npm test                     # every offline suite (see "What's verified")
 npm run typecheck            # strict TS, no `any`
 npm run check:model          # verify the configured Claude model ids are current
 npx tsx scripts/verify-trace.ts   # projection + parser + policy-flip contract
@@ -240,17 +256,23 @@ on Cloudflare Workers via the OpenNext adapter.
   before consuming the stream, and pre-warms with a cheap `GET`, so a reviewer's
   first click never looks broken.
 
-## What I'd build next
+## Built since the first version
 
-- **Human-in-the-loop approval that resolves** — _built_ as the
+- **Human-in-the-loop approval that resolves** — built as the
   [intervention console](docs/COSIGN.md): a cosign queue where an operator approves/rejects a
   held action and the decision routes back to the enforcement plane (fail-closed on timeout).
-- **Durable audit log** — _built_ as the hash-linked **Truth Chain** (append-only, server-only
+- **Durable audit log** — built as the hash-linked **Truth Chain** (append-only, server-only
   writes, tamper-evident); persisted to Postgres on the live path (`supabase/`).
+- **An eval harness** — built: [`evals/`](evals), a labelled set scored in CI with
+  precision and recall per decision (see "How good is the gate?").
+
+## What I'd build next
+
+- **Close the measured gaps** — check `cc` / `bcc` recipients, widen the separator
+  handling in the SSN and card patterns, and decide how far the gate should inspect a
+  payload that contradicts its declared kind.
 - **Policy as data** — load rules/thresholds from a versioned config or small DSL,
   with per-rule provenance requirements, instead of code.
-- **An eval harness** — a labeled set of (task → expected decision) cases run in CI to
-  catch policy regressions, with precision/recall on block decisions.
 - **More gate types** — rate limits, spend caps, recipient allowlists, and
   data-residency rules, composed into named policy bundles.
 
@@ -268,15 +290,17 @@ lib/trace-model.ts     pure projection TraceEvent[] → nodes/edges/status
 components/            React Flow canvas + hero + guided walkthrough + audit panels
 mocks/trace.sample.ts  recorded runs for the instant Sample mode
 scripts/verify-trace.ts headless contract test (CI)
+evals/                 labelled gate evaluation: cases, published results, CI baseline
 docs/ARCHITECTURE.md   data flow + full event schema
-docs/STATUS.md         current state, decisions, operational setup + open items
+docs/CONSENSUS.md      the model triad, attested voices and the Red Cell
+docs/STATUS.md         decision log and operational notes (partly historical)
 examples/governed-trader/  the same gate on a trade — the canonical irreversible action
 
 # the intervention console (cosign · fleet · drift) — see docs/COSIGN.md
 app/console/page.tsx          RSC first paint → the client console
 app/_actions/cosign.ts        decideCosign Server Action (audit-before · submit · audit-after)
 app/api/governance/stream     realtime NDJSON: fleet snapshot, holds arriving, drift firing
-app/api/governance/sweep      fail-closed TTL sweeper (Vercel Cron backstop)
+app/api/governance/sweep      fail-closed TTL sweeper (called by the Cloudflare Cron Trigger)
 governance/types.ts           Zod schemas at every boundary (BASIS tier, holds, method-aware drift)
 governance/source.ts          the adapter boundary (sim/live swappable)
 governance/sources/simulator.ts  zero-infra: scripts the Cason↔Causey hold + the Scribe I(θ) drift

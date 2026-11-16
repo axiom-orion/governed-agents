@@ -1,0 +1,23 @@
+{
+  "knownMisses": {
+    "clean-15": "block",
+    "clean-16": "block",
+    "pii-ev-01": "allow",
+    "pii-ev-02": "allow",
+    "pii-ev-03": "allow",
+    "pii-ev-04": "allow",
+    "pii-ev-07": "allow",
+    "pii-ev-08": "allow",
+    "pii-ev-09": "allow",
+    "pii-ev-11": "allow",
+    "pii-ev-12": "allow",
+    "pii-ev-15": "allow",
+    "pii-ev-18": "allow",
+    "pii-ev-19": "allow",
+    "pii-pl-05": "allow",
+    "send-05": "allow",
+    "send-06": "allow",
+    "trust-01": "allow",
+    "trust-02": "allow"
+  }
+}
